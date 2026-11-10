@@ -24,7 +24,7 @@ android {
         applicationId = "com.example.cue_bill"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = 23 // flutter_secure_storage needs Android 6.0+
+        minSdk = flutter.minSdkVersion // flutter_secure_storage needs Android 6.0+
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
