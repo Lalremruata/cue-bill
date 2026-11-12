@@ -37,8 +37,6 @@ class PosScreen extends StatelessWidget {
     final store = context.watch<AppStore>();
     final nav = context.watch<Nav>();
     final table = store.tableById(nav.selectedTableId);
-    final width = MediaQuery.sizeOf(context).width;
-    final pad = width < 600 ? 16.0 : 32.0;
 
     final header = PageHeader(
       title: 'Tables & Orders',
@@ -50,16 +48,79 @@ class PosScreen extends StatelessWidget {
         LegendItem(label: 'Time up', color: context.cb.red),
       ],
     );
-    const alerts = _BookingStrip();
-    final grid = _TableGrid(selectedId: table?.id);
-    final menu = _MenuPicker(table: table);
+    return _OrderingLayout(
+      table: table,
+      top: [
+        header,
+        const _BookingStrip(),
+        _TableGrid(selectedId: table?.id),
+      ],
+    );
+  }
+}
+
+/// Takeaway: open takeaway orders and the menu on the left, the order panel on the right.
+/// No tables and no pool timer; each order is numbered (Takeaway #1, #2, …) and billed on its own.
+class TakeawayScreen extends StatelessWidget {
+  const TakeawayScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final store = context.watch<AppStore>();
+    final nav = context.watch<Nav>();
+    final order = store.tableById(nav.selectedTakeawayId);
+    final orders = store.takeawayOrders;
+
+    final header = PageHeader(
+      title: 'Takeaway',
+      subtitle: 'Orders to take away. No table and no pool timer.',
+      actions: [
+        FilledButton.icon(
+          onPressed: () async {
+            final created = await store.newTakeaway();
+            nav.selectTakeaway(created.id);
+          },
+          icon: const Icon(Icons.add, size: 18),
+          label: const Text('New takeaway'),
+        ),
+      ],
+    );
+    final list = orders.isEmpty
+        ? CbCard(
+            child: Text('No takeaway orders open. Tap New takeaway to start one.', style: CbText.muted(context, 14)),
+          )
+        : ResponsiveGrid(
+            minWidth: 160,
+            spacing: 12,
+            maxColumns: 4,
+            children: [for (final t in orders) _TableCard(table: t, selected: t.id == order?.id)],
+          );
+    return _OrderingLayout(table: order, takeaway: true, top: [header, list]);
+  }
+}
+
+/// Shared by Tables & Orders and Takeaway: [top] then the menu on the left, the order panel on
+/// the right. Below 1080 px the menu sits under [top] and the order is a bar along the bottom.
+class _OrderingLayout extends StatelessWidget {
+  const _OrderingLayout({required this.table, required this.top, this.takeaway = false});
+
+  final RestaurantTable? table;
+  final List<Widget> top;
+  final bool takeaway;
+
+  @override
+  Widget build(BuildContext context) {
+    final table = this.table;
+    final width = MediaQuery.sizeOf(context).width;
+    final pad = width < 600 ? 16.0 : 32.0;
+    final menu = _MenuPicker(table: table, takeaway: takeaway);
 
     return LayoutBuilder(
       builder: (context, c) {
         if (c.maxWidth >= 1080) {
           // Tall enough: the panel's header and totals stay put and only the order lines scroll.
           final fill = c.maxHeight >= 600;
-          final panel = _OrderPanel(key: ValueKey('panel-${table?.id}'), table: table, fill: fill);
+          final panel = _OrderPanel(key: ValueKey('panel-${table?.id}'), table: table, fill: fill, takeaway: takeaway);
           final panelPad = EdgeInsets.fromLTRB(12, pad - 4, pad, pad);
           return Row(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -70,7 +131,7 @@ class PosScreen extends StatelessWidget {
                   padding: EdgeInsets.fromLTRB(pad, pad - 4, 12, pad),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [header, alerts, grid, const SizedBox(height: 24), menu],
+                    children: [...top, const SizedBox(height: 24), menu],
                   ),
                 ),
               ),
@@ -86,7 +147,7 @@ class PosScreen extends StatelessWidget {
             ],
           );
         }
-        // Phones and tablets: tables, then the menu; the order is a bar that opens a sheet.
+        // Phones and tablets: [top], then the menu; the order is a bar that opens a sheet.
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -95,7 +156,7 @@ class PosScreen extends StatelessWidget {
                 padding: EdgeInsets.fromLTRB(pad, pad - 4, pad, pad),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [header, alerts, grid, const SizedBox(height: 20), menu],
+                  children: [...top, const SizedBox(height: 20), menu],
                 ),
               ),
             ),
@@ -441,7 +502,10 @@ class _TableCard extends StatelessWidget {
               ),
               child: InkWell(
                 borderRadius: BorderRadius.circular(14),
-                onTap: () => context.read<Nav>().selectTable(table.id),
+                onTap: () {
+                  final nav = context.read<Nav>();
+                  table.isTakeaway ? nav.selectTakeaway(table.id) : nav.selectTable(table.id);
+                },
                 child: Container(
                   constraints: const BoxConstraints(minHeight: 120),
                   padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
@@ -497,10 +561,13 @@ class _TableCard extends StatelessWidget {
 /// With [fill], the panel takes at most the height it is given: the header and totals
 /// stay in view and only the order lines scroll, however long the order gets.
 class _OrderPanel extends StatefulWidget {
-  const _OrderPanel({super.key, required this.table, this.fill = false, this.inSheet = false});
+  const _OrderPanel({super.key, required this.table, this.fill = false, this.inSheet = false, this.takeaway = false});
 
   final RestaurantTable? table;
   final bool fill;
+
+  /// On the Takeaway page: the empty panel asks for a takeaway order, not a table.
+  final bool takeaway;
 
   /// Shown in the phone bottom sheet: checkout and clear close the sheet first.
   final bool inSheet;
@@ -557,13 +624,15 @@ class _OrderPanelState extends State<_OrderPanel> {
           children: [
             _DarkHeader(
               children: [
-                const Text(
-                  'No table selected',
-                  style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w700),
+                Text(
+                  widget.takeaway ? 'No order selected' : 'No table selected',
+                  style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w700),
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  'Tap a table to open it, start the pool timer or add food.',
+                  widget.takeaway
+                      ? 'Tap New takeaway to start an order, or tap an open one.'
+                      : 'Tap a table to open it, start the pool timer or add food.',
                   style: TextStyle(color: Colors.white.withValues(alpha: 0.72), fontSize: 13.5),
                 ),
               ],
@@ -1095,10 +1164,11 @@ class _PanelFooter extends StatelessWidget {
                           : () async {
                               final ok = await confirmDialog(
                                 context,
-                                title: 'Clear ${table.name}?',
-                                message:
-                                    'This removes the order and the timer without billing. Use it for a table opened by mistake.',
-                                confirm: 'Clear table',
+                                title: table.isTakeaway ? 'Cancel ${table.name}?' : 'Clear ${table.name}?',
+                                message: table.isTakeaway
+                                    ? 'This removes the takeaway order without billing.'
+                                    : 'This removes the order and the timer without billing. Use it for a table opened by mistake.',
+                                confirm: table.isTakeaway ? 'Cancel order' : 'Clear table',
                                 danger: true,
                               );
                               if (!ok) return;
@@ -1118,7 +1188,7 @@ class _PanelFooter extends StatelessWidget {
                               final nav = context.read<Nav>();
                               await store.stopTimer(table);
                               if (inSheet && context.mounted) Navigator.of(context).pop();
-                              nav.openCheckout(table.id!);
+                              nav.openCheckout(table.id!, takeaway: table.isTakeaway);
                             },
                       child: Text(
                         table.isPool && session?.timerState != TimerState.stopped && session?.timerStartedAt != null
@@ -1629,9 +1699,10 @@ class _StepButton extends StatelessWidget {
 }
 
 class _MenuPicker extends StatefulWidget {
-  const _MenuPicker({required this.table});
+  const _MenuPicker({required this.table, this.takeaway = false});
 
   final RestaurantTable? table;
+  final bool takeaway;
 
   @override
   State<_MenuPicker> createState() => _MenuPickerState();
@@ -1707,7 +1778,12 @@ class _MenuPickerState extends State<_MenuPicker> {
           if (table == null)
             Padding(
               padding: const EdgeInsets.only(bottom: 12),
-              child: Text('Pick a table first, then tap an item to add it.', style: CbText.muted(context, 13.5)),
+              child: Text(
+                widget.takeaway
+                    ? 'Start a takeaway order first, then tap an item to add it.'
+                    : 'Pick a table first, then tap an item to add it.',
+                style: CbText.muted(context, 13.5),
+              ),
             ),
           if (items.isEmpty)
             Padding(
@@ -1728,7 +1804,7 @@ class _MenuPickerState extends State<_MenuPicker> {
                     enabled: table != null,
                     onTap: () {
                       if (table == null) {
-                        toast(context, 'Pick a table first.');
+                        toast(context, widget.takeaway ? 'Start a takeaway order first.' : 'Pick a table first.');
                         return;
                       }
                       store.addItem(table, m);

@@ -32,7 +32,9 @@ void main() {
   test('seeds menu, tables and settings on first run', () {
     expect(store.menu.length, 16);
     expect(store.activeTables.first.name, 'Pool Table 1');
-    expect(store.activeTables.last.name, 'Takeaway');
+    expect(store.activeTables.last.name, 'Table 5');
+    expect(store.activeTables.where((t) => t.isTakeaway), isEmpty);
+    expect(store.takeawayOrders, isEmpty);
     expect(store.settings.invoiceFooter, 'Thank you! Come back for another frame.');
   });
 
@@ -231,8 +233,15 @@ void main() {
       options: OpenDatabaseOptions(
         version: 1,
         onCreate: (db, _) async {
-          await db.execute('CREATE TABLE table_sessions (id INTEGER PRIMARY KEY, restaurant_table_id INTEGER)');
-          await db.execute('CREATE TABLE invoices (id INTEGER PRIMARY KEY, number TEXT)');
+          await db.execute(
+            'CREATE TABLE restaurant_tables (id INTEGER PRIMARY KEY, name TEXT, type TEXT, is_active INTEGER)',
+          );
+          await db.execute(
+            'CREATE TABLE table_sessions (id INTEGER PRIMARY KEY, restaurant_table_id INTEGER, status TEXT)',
+          );
+          await db.execute(
+            'CREATE TABLE invoices (id INTEGER PRIMARY KEY, number TEXT, table_session_id INTEGER, table_name TEXT)',
+          );
         },
       ),
     );
@@ -241,9 +250,137 @@ void main() {
     Future<Set<Object?>> cols(String t) async =>
         (await db.rawQuery('PRAGMA table_info($t)')).map((r) => r['name']).toSet();
     expect(await cols('table_sessions'), contains('booked_minutes'));
-    expect(await cols('invoices'), contains('pool_booked_minutes'));
+    expect(await cols('invoices'), containsAll(['pool_booked_minutes', 'order_type']));
     expect(await cols('session_events'), containsAll(['type', 'minutes', 'note', 'at']));
     await db.close();
+  });
+
+  test('upgrading to version 3 marks past takeaway invoices', () async {
+    final path = '${dir.path}/v2.sqlite';
+    final old = await databaseFactoryFfi.openDatabase(
+      path,
+      options: OpenDatabaseOptions(
+        version: 2,
+        onCreate: (db, _) async {
+          await db.execute(
+            'CREATE TABLE restaurant_tables (id INTEGER PRIMARY KEY, name TEXT, type TEXT, is_active INTEGER)',
+          );
+          await db.execute(
+            'CREATE TABLE table_sessions (id INTEGER PRIMARY KEY, restaurant_table_id INTEGER, status TEXT)',
+          );
+          await db.execute(
+            'CREATE TABLE invoices (id INTEGER PRIMARY KEY, number TEXT, table_session_id INTEGER, table_name TEXT)',
+          );
+          await db.insert('restaurant_tables', {'id': 1, 'name': 'Table 1', 'type': 'dining'});
+          // Renamed since the sale: found through its session, not its name.
+          await db.insert('restaurant_tables', {'id': 2, 'name': 'Parcel', 'type': 'takeaway'});
+          await db.insert('table_sessions', {'id': 10, 'restaurant_table_id': 1});
+          await db.insert('table_sessions', {'id': 11, 'restaurant_table_id': 2});
+          await db.insert('invoices', {'number': 'A', 'table_session_id': 10, 'table_name': 'Table 1'});
+          await db.insert('invoices', {'number': 'B', 'table_session_id': 11, 'table_name': 'Takeaway'});
+          // Sample sales have no session: matched by table name.
+          await db.insert('invoices', {'number': 'C', 'table_session_id': null, 'table_name': 'Parcel'});
+          await db.insert('invoices', {'number': 'D', 'table_session_id': null, 'table_name': 'Table 1'});
+        },
+      ),
+    );
+    await old.close();
+    final db = await AppDatabase.open(path, databaseFactoryFfi);
+    final rows = await db.query('invoices', columns: ['number', 'order_type'], orderBy: 'number');
+    expect({for (final r in rows) r['number']: r['order_type']}, {
+      'A': 'dine_in',
+      'B': 'takeaway',
+      'C': 'takeaway',
+      'D': 'dine_in',
+    });
+    await db.close();
+  });
+
+  test('takeaway orders need no table: numbered, open side by side, put away once done', () async {
+    final first = await store.newTakeaway();
+    final second = await store.newTakeaway();
+    final third = await store.newTakeaway();
+    expect([first.name, second.name, third.name], ['Takeaway #1', 'Takeaway #2', 'Takeaway #3']);
+    expect([for (final t in store.takeawayOrders) t.name], ['Takeaway #1', 'Takeaway #2', 'Takeaway #3']);
+    expect(store.activeTables.any((t) => t.isTakeaway), isFalse);
+    expect(store.sessionFor(first), isNotNull);
+
+    final menu = {for (final m in store.menu) m.name: m};
+    await store.addItem(first, menu['Pork chowmein']!, 2);
+    await store.addItem(second, menu['Cold coffee']!);
+    final calc = store.calcFor(first)!;
+    expect(calc.isPool, isFalse);
+    expect(calc.itemsSubtotal, 300);
+
+    final invoice = await store.completeSale(first, const CheckoutOptions(paymentMethod: 'cash'));
+    expect(invoice.tableName, 'Takeaway #1');
+    expect(invoice.orderType, 'takeaway');
+    await store.clearTable(third);
+    expect([for (final t in store.takeawayOrders) t.name], ['Takeaway #2']);
+
+    // Still open after a restart; billed and cancelled ones stay put away.
+    await store.reload();
+    expect([for (final t in store.takeawayOrders) t.name], ['Takeaway #2']);
+    expect(store.sessionFor(store.takeawayOrders.single)!.items.single.qty, 1);
+    expect((await store.newTakeaway()).name, 'Takeaway #4');
+  });
+
+  test('upgrading to version 4 puts away the old Takeaway table unless it has an order open', () async {
+    final path = '${dir.path}/v3.sqlite';
+    final old = await databaseFactoryFfi.openDatabase(
+      path,
+      options: OpenDatabaseOptions(
+        version: 3,
+        onCreate: (db, _) async {
+          await db.execute(
+            'CREATE TABLE restaurant_tables (id INTEGER PRIMARY KEY, name TEXT, type TEXT, is_active INTEGER)',
+          );
+          await db.execute(
+            'CREATE TABLE table_sessions (id INTEGER PRIMARY KEY, restaurant_table_id INTEGER, status TEXT)',
+          );
+          await db.insert('restaurant_tables', {'id': 1, 'name': 'Table 1', 'type': 'dining', 'is_active': 1});
+          await db.insert('restaurant_tables', {'id': 2, 'name': 'Takeaway', 'type': 'takeaway', 'is_active': 1});
+          await db.insert('restaurant_tables', {'id': 3, 'name': 'Parcel', 'type': 'takeaway', 'is_active': 1});
+          await db.insert('table_sessions', {'restaurant_table_id': 2, 'status': 'closed'});
+          await db.insert('table_sessions', {'restaurant_table_id': 3, 'status': 'open'});
+        },
+      ),
+    );
+    await old.close();
+    final db = await AppDatabase.open(path, databaseFactoryFfi);
+    final rows = await db.query('restaurant_tables', orderBy: 'id');
+    expect([for (final r in rows) r['is_active']], [1, 0, 1]);
+    await db.close();
+  });
+
+  test('takeaway and dine-in sales are saved and reported separately', () async {
+    final dining = store.activeTables.firstWhere((t) => t.name == 'Table 1');
+    final takeaway = await store.newTakeaway();
+    final pool = store.activeTables.firstWhere((t) => t.isPool);
+    final menu = {for (final m in store.menu) m.name: m};
+
+    await store.addItem(dining, menu['Chicken momo (8 pc)']!, 2); // 240
+    await store.addItem(takeaway, menu['Pork chowmein']!, 3); // 450
+    await store.addItem(pool, menu['Cold coffee']!); // 100
+    final a = await store.completeSale(dining, const CheckoutOptions(paymentMethod: 'cash'));
+    final b = await store.completeSale(takeaway, const CheckoutOptions(paymentMethod: 'upi'));
+    final c = await store.completeSale(pool, const CheckoutOptions(paymentMethod: 'cash'));
+    expect([a.orderType, b.orderType, c.orderType], ['dine_in', 'takeaway', 'dine_in']);
+    expect((await store.recentInvoices()).where((i) => i.isTakeaway).single.number, b.number);
+
+    final now = DateTime.now();
+    final all = await store.analytics(now, now);
+    final out = await store.analytics(now, now, orderType: 'takeaway');
+    final dineIn = await store.analytics(now, now, orderType: 'dine_in');
+    expect(out.summary().invoices, 1);
+    expect([for (final l in out.sales()) l.name], ['Pork chowmein']);
+    expect(dineIn.summary().invoices, 2);
+    expect([for (final l in dineIn.sales()) l.name], containsAll(['Chicken momo (8 pc)', 'Cold coffee']));
+
+    final today = all.daily().last;
+    expect(today.takeaway, 450);
+    expect(today.dineIn, 340);
+    expect(today.dineIn + today.takeaway, today.food + today.drinks + today.snacks);
   });
 
   test('pool rate uses happy hour, then the table rate, then the default', () {

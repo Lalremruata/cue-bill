@@ -35,6 +35,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
   late DateTime _to;
   int? _quick = 30;
   String? _payment;
+  String? _orderType;
   _Tab _tab = _Tab.sales;
   String? _type;
   String _sort = 'profit';
@@ -78,13 +79,16 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
   static const _types = {null: 'All', 'pool': 'Pool table', 'food': 'Food', 'snacks': 'Snacks', 'drinks': 'Drinks'};
 
-  String get _rangeLabel =>
-      '${Fmt.dateRange(_from, _to)}'
-      '${_payment == null ? '' : ' · ${paymentMethods[_payment]} only'}';
+  String get _rangeLabel => [
+    Fmt.dateRange(_from, _to),
+    if (_orderType != null) '${orderTypes[_orderType]} only',
+    if (_payment != null) '${paymentMethods[_payment]} only',
+  ].join(' · ');
 
-  /// Filters that narrow the item sales list, e.g. `Drinks only`, `UPI only`.
+  /// Filters that narrow the item sales list, e.g. `Drinks only`, `Takeaway only`, `UPI only`.
   List<String> get _salesFilters => [
     if (_type != null) '${_types[_type]} only',
+    if (_orderType != null) '${orderTypes[_orderType]} only',
     if (_payment != null) '${paymentMethods[_payment]} only',
   ];
 
@@ -153,7 +157,20 @@ class _ReportsScreenState extends State<ReportsScreen> {
         {2, 3, 4, 5, 6},
       ),
       _Tab.daily => (
-        ['Date', 'Invoices', 'Pool h', 'Pool', 'Food', 'Drinks', 'Snacks', 'Collected', 'Profit', 'Margin'],
+        [
+          'Date',
+          'Invoices',
+          'Pool h',
+          'Pool',
+          'Food',
+          'Drinks',
+          'Snacks',
+          'Dine-in',
+          'Takeaway',
+          'Collected',
+          'Profit',
+          'Margin',
+        ],
         [
           for (final r in a.daily().reversed)
             [
@@ -164,12 +181,14 @@ class _ReportsScreenState extends State<ReportsScreen> {
               Fmt.inr(r.food),
               Fmt.inr(r.drinks),
               Fmt.inr(r.snacks),
+              Fmt.inr(r.dineIn),
+              Fmt.inr(r.takeaway),
               Fmt.inr(r.collected),
               Fmt.inr(r.profit),
               Fmt.percent(r.margin, 0),
             ],
         ],
-        {1, 2, 3, 4, 5, 6, 7, 8, 9},
+        {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11},
       ),
       _Tab.invoices => (
         ['Invoice', 'Date & time', 'Table', 'Paid by', 'Amount'],
@@ -194,10 +213,10 @@ class _ReportsScreenState extends State<ReportsScreen> {
   @override
   Widget build(BuildContext context) {
     final store = context.watch<AppStore>();
-    final key = (_from, _to, _payment, store.revision);
+    final key = (_from, _to, _payment, _orderType, store.revision);
     if (_loadedFor != key) {
       _loadedFor = key;
-      _future = store.analytics(_from, _to, payment: _payment);
+      _future = store.analytics(_from, _to, payment: _payment, orderType: _orderType);
     }
 
     return FutureBuilder<SalesAnalytics>(
@@ -265,6 +284,21 @@ class _ReportsScreenState extends State<ReportsScreen> {
         children: [
           dateButton('From', _from, true),
           dateButton('To', _to, false),
+          FieldLabel(
+            'Order type',
+            child: SizedBox(
+              width: 170,
+              child: DropdownButtonFormField<String?>(
+                value: _orderType,
+                isExpanded: true,
+                items: [
+                  const DropdownMenuItem(value: null, child: Text('Dine-in & takeaway')),
+                  for (final e in orderTypes.entries) DropdownMenuItem(value: e.key, child: Text(e.value)),
+                ],
+                onChanged: (v) => setState(() => _orderType = v),
+              ),
+            ),
+          ),
           FieldLabel(
             'Payment',
             child: SizedBox(
@@ -511,7 +545,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
   Widget _dailyTab(BuildContext context, SalesAnalytics a) {
     final rows = a.daily().reversed.toList();
     return CbTable(
-      minWidth: 1000,
+      minWidth: 1200,
       empty: 'No days in range.',
       columns: const [
         Col('Date', flex: 3),
@@ -521,6 +555,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
         Col('Food', flex: 3, right: true),
         Col('Drinks', flex: 3, right: true),
         Col('Snacks', flex: 3, right: true),
+        Col('Dine-in', flex: 3, right: true),
+        Col('Takeaway', flex: 3, right: true),
         Col('Collected', flex: 3, right: true),
         Col('Profit', flex: 3, right: true),
         Col('Margin', flex: 2, right: true),
@@ -535,6 +571,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
             NumText(Fmt.inr(r.food)),
             NumText(Fmt.inr(r.drinks)),
             NumText(Fmt.inr(r.snacks)),
+            NumText(Fmt.inr(r.dineIn)),
+            NumText(Fmt.inr(r.takeaway)),
             NumText(Fmt.inr(r.collected)),
             NumText(Fmt.inr(r.profit), bold: true),
             NumText(Fmt.percent(r.margin, 0), color: toneColor(context, marginTone(r.margin))),
