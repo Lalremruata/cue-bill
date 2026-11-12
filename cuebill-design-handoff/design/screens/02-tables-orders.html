@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CueBill design reference — 02-tables-orders</title>
+<!-- Static render of the design canvas artboard Tables.dc.html. Reference only: build the real screen in Filament. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Space+Grotesk:wght@500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#F4F6F3}
+a{color:#0E6B4A}a:hover{color:#0A4F37}
+.nav a{display:flex;align-items:center;gap:12px;padding:11px 14px;border-radius:10px;color:#C9D6CF;text-decoration:none;font-size:14px;font-weight:500;min-height:22px}
+.nav a:hover{background:#1F2E27;color:#FFFFFF}
+.nav a.on{background:#0E6B4A;color:#FFFFFF}
+.card{background:#FFFFFF;border:1px solid #E1E5E0;border-radius:14px}
+.num{font-variant-numeric:tabular-nums}
+.btn{display:inline-flex;align-items:center;gap:8px;min-height:44px;padding:0 16px;border-radius:10px;font:600 14px Inter,sans-serif;cursor:pointer;text-decoration:none;box-sizing:border-box}
+.btn-p{background:#0E6B4A;color:#FFFFFF;border:1px solid #0E6B4A}
+.btn-s{background:#FFFFFF;color:#16201B;border:1px solid #D3D9D2}
+.seg button{border:0;background:transparent;padding:0 14px;min-height:36px;border-radius:8px;font:500 13px Inter,sans-serif;color:#4A5650;cursor:pointer}
+.seg button.on{background:#FFFFFF;color:#16201B;box-shadow:0 1px 2px rgba(0,0,0,.08)}
+table{border-collapse:collapse;width:100%}
+th{font:600 12px Inter,sans-serif;color:#56625B;text-align:left;padding:10px 12px;border-bottom:1px solid #E1E5E0;text-transform:uppercase;letter-spacing:.04em}
+td{font:400 14px Inter,sans-serif;color:#16201B;padding:12px;border-bottom:1px solid #EEF1ED}
+</style>
+</head>
+<body>
+<div style="display: flex; flex-wrap: wrap; min-height: 100vh; font-family: Inter, system-ui, sans-serif; color: #16201B">
+<aside style="flex: 1 0 232px; max-width: 100%; background: #14201A; padding: 24px 16px; box-sizing: border-box; display: flex; flex-direction: column; gap: 28px">
+<div style="display: flex; align-items: center; gap: 10px; padding: 0 6px">
+<svg width="34" height="34" viewBox="0 0 34 34" aria-hidden="true"><circle cx="17" cy="17" r="15" fill="#0E6B4A"></circle><circle cx="17" cy="17" r="7" fill="#FFFFFF"></circle><text x="17" y="21" text-anchor="middle" font-family="Space Grotesk" font-weight="700" font-size="10" fill="#14201A">8</text></svg>
+<div><div style="font: 700 18px 'Space Grotesk', sans-serif; color: #FFFFFF">CueBill</div><div style="font-size: 12px; color: #9DB0A6">[YOUR RESTAURANT]</div></div>
+</div>
+<nav class="nav" aria-label="Main" style="display: flex; flex-direction: column; gap: 4px">
+<a href="01-dashboard.html"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1"></rect><rect x="14" y="3" width="7" height="5" rx="1"></rect><rect x="14" y="12" width="7" height="9" rx="1"></rect><rect x="3" y="16" width="7" height="5" rx="1"></rect></svg>Dashboard</a>
+<a class="on" href="02-tables-orders.html"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="2" y="6" width="20" height="12" rx="2"></rect><circle cx="12" cy="12" r="2"></circle></svg>Tables &amp; Orders</a>
+<a href="03-checkout-invoice.html"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 2h12v20l-3-2-3 2-3-2-3 2z"></path><path d="M9 7h6M9 11h6M9 15h4"></path></svg>Invoices</a>
+<a href="04-reports.html"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"></path></svg>Reports</a>
+<a href="05-menu-costs.html"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"></path></svg>Menu &amp; Costs</a>
+<a href="06-business-settings.html"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></svg>Settings</a>
+</nav>
+<div style="margin-top: auto; background: #1F2E27; border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 6px">
+<div style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: #FFFFFF; font-weight: 600"><span style="width: 8px; height: 8px; border-radius: 50%; background: #5FD39B"></span>Saved locally</div>
+<div style="font-size: 12px; color: #A9BAB1; line-height: 1.5">All sales stored on this device. Last backup today, 2:00 PM.</div>
+</div>
+</aside>
+<main style="flex: 999 1 560px; min-width: 0; padding: 28px 32px 40px; box-sizing: border-box; display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start">
+
+<div style="flex: 3 1 520px; min-width: 0; display: flex; flex-direction: column; gap: 22px">
+<header style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px">
+<div><h1 style="margin: 0; font: 700 28px 'Space Grotesk', sans-serif">Tables &amp; Orders</h1><p style="margin: 4px 0 0; font-size: 14px; color: #56625B">Pick a table, start the pool timer, add food and drinks.</p></div>
+<div style="display: flex; gap: 14px; font-size: 13px; color: #3E4A44; flex-wrap: wrap">
+<span style="display: flex; align-items: center; gap: 6px"><span style="width: 10px; height: 10px; border-radius: 50%; background: #0E6B4A"></span>In play</span>
+<span style="display: flex; align-items: center; gap: 6px"><span style="width: 10px; height: 10px; border-radius: 50%; background: #D08A2E"></span>Paused / ordering</span>
+<span style="display: flex; align-items: center; gap: 6px"><span style="width: 10px; height: 10px; border-radius: 50%; border: 2px solid #A7B2AC; box-sizing: border-box"></span>Free</span>
+</div>
+</header>
+
+<section aria-label="Tables" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px">
+
+<button aria-pressed="true" style="text-align: left; cursor: pointer; display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; min-height: 120px; border-radius: 14px; font-family: Inter, sans-serif; color: #16201B; background: #F0F7F3; border: 2px solid #0E6B4A; box-shadow: 0 0 0 4px #D3EADF">
+<div style="display: flex; justify-content: space-between; align-items: center; width: 100%">
+<span style="font: 600 15px 'Space Grotesk', sans-serif">Pool Table 1</span>
+<span style="width: 12px; height: 12px; border-radius: 50%; box-sizing: border-box; background: #0E6B4A"></span>
+</div>
+<span style="font-size: 12px; color: #56625B">Pool table · ₹200/hr</span>
+<span class="num" style="font: 600 22px 'Space Grotesk', sans-serif">01:24:10</span>
+<span class="num" style="font-size: 13px; color: #3E4A44">₹911 so far</span>
+</button>
+
+<button aria-pressed="false" style="text-align: left; cursor: pointer; display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; min-height: 120px; border-radius: 14px; font-family: Inter, sans-serif; color: #16201B; background: #F0F7F3; border: 1px solid #E1E5E0">
+<div style="display: flex; justify-content: space-between; align-items: center; width: 100%">
+<span style="font: 600 15px 'Space Grotesk', sans-serif">Pool Table 2</span>
+<span style="width: 12px; height: 12px; border-radius: 50%; box-sizing: border-box; background: #D08A2E"></span>
+</div>
+<span style="font-size: 12px; color: #56625B">Pool table · ₹200/hr</span>
+<span class="num" style="font: 600 22px 'Space Grotesk', sans-serif">00:35:00</span>
+<span class="num" style="font-size: 13px; color: #3E4A44">₹366 so far</span>
+</button>
+
+<button aria-pressed="false" style="text-align: left; cursor: pointer; display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; min-height: 120px; border-radius: 14px; font-family: Inter, sans-serif; color: #16201B; background: #FFFFFF; border: 1px solid #E1E5E0">
+<div style="display: flex; justify-content: space-between; align-items: center; width: 100%">
+<span style="font: 600 15px 'Space Grotesk', sans-serif">Table 1</span>
+<span style="width: 12px; height: 12px; border-radius: 50%; box-sizing: border-box; background: transparent; border: 2px solid #A7B2AC"></span>
+</div>
+<span style="font-size: 12px; color: #56625B">Dining</span>
+<span class="num" style="font: 600 22px 'Space Grotesk', sans-serif">Free</span>
+<span class="num" style="font-size: 13px; color: #3E4A44">Tap to open</span>
+</button>
+
+<button aria-pressed="false" style="text-align: left; cursor: pointer; display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; min-height: 120px; border-radius: 14px; font-family: Inter, sans-serif; color: #16201B; background: #FFFFFF; border: 1px solid #E1E5E0">
+<div style="display: flex; justify-content: space-between; align-items: center; width: 100%">
+<span style="font: 600 15px 'Space Grotesk', sans-serif">Table 2</span>
+<span style="width: 12px; height: 12px; border-radius: 50%; box-sizing: border-box; background: #D08A2E"></span>
+</div>
+<span style="font-size: 12px; color: #56625B">Dining</span>
+<span class="num" style="font: 600 22px 'Space Grotesk', sans-serif">₹504</span>
+<span class="num" style="font-size: 13px; color: #3E4A44">2 items</span>
+</button>
+
+<button aria-pressed="false" style="text-align: left; cursor: pointer; display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; min-height: 120px; border-radius: 14px; font-family: Inter, sans-serif; color: #16201B; background: #FFFFFF; border: 1px solid #E1E5E0">
+<div style="display: flex; justify-content: space-between; align-items: center; width: 100%">
+<span style="font: 600 15px 'Space Grotesk', sans-serif">Table 3</span>
+<span style="width: 12px; height: 12px; border-radius: 50%; box-sizing: border-box; background: transparent; border: 2px solid #A7B2AC"></span>
+</div>
+<span style="font-size: 12px; color: #56625B">Dining</span>
+<span class="num" style="font: 600 22px 'Space Grotesk', sans-serif">Free</span>
+<span class="num" style="font-size: 13px; color: #3E4A44">Tap to open</span>
+</button>
+
+<button aria-pressed="false" style="text-align: left; cursor: pointer; display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; min-height: 120px; border-radius: 14px; font-family: Inter, sans-serif; color: #16201B; background: #FFFFFF; border: 1px solid #E1E5E0">
+<div style="display: flex; justify-content: space-between; align-items: center; width: 100%">
+<span style="font: 600 15px 'Space Grotesk', sans-serif">Table 4</span>
+<span style="width: 12px; height: 12px; border-radius: 50%; box-sizing: border-box; background: #D08A2E"></span>
+</div>
+<span style="font-size: 12px; color: #56625B">Dining</span>
+<span class="num" style="font: 600 22px 'Space Grotesk', sans-serif">₹242</span>
+<span class="num" style="font-size: 13px; color: #3E4A44">2 items</span>
+</button>
+
+<button aria-pressed="false" style="text-align: left; cursor: pointer; display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; min-height: 120px; border-radius: 14px; font-family: Inter, sans-serif; color: #16201B; background: #FFFFFF; border: 1px solid #E1E5E0">
+<div style="display: flex; justify-content: space-between; align-items: center; width: 100%">
+<span style="font: 600 15px 'Space Grotesk', sans-serif">Table 5</span>
+<span style="width: 12px; height: 12px; border-radius: 50%; box-sizing: border-box; background: transparent; border: 2px solid #A7B2AC"></span>
+</div>
+<span style="font-size: 12px; color: #56625B">Dining</span>
+<span class="num" style="font: 600 22px 'Space Grotesk', sans-serif">Free</span>
+<span class="num" style="font-size: 13px; color: #3E4A44">Tap to open</span>
+</button>
+
+<button aria-pressed="false" style="text-align: left; cursor: pointer; display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; min-height: 120px; border-radius: 14px; font-family: Inter, sans-serif; color: #16201B; background: #FFFFFF; border: 1px solid #E1E5E0">
+<div style="display: flex; justify-content: space-between; align-items: center; width: 100%">
+<span style="font: 600 15px 'Space Grotesk', sans-serif">Takeaway</span>
+<span style="width: 12px; height: 12px; border-radius: 50%; box-sizing: border-box; background: transparent; border: 2px solid #A7B2AC"></span>
+</div>
+<span style="font-size: 12px; color: #56625B">Dining</span>
+<span class="num" style="font: 600 22px 'Space Grotesk', sans-serif">Free</span>
+<span class="num" style="font-size: 13px; color: #3E4A44">Tap to open</span>
+</button>
+
+</section>
+
+<section class="card" style="padding: 20px; display: flex; flex-direction: column; gap: 16px">
+<div style="display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; align-items: center">
+<h2 style="margin: 0; font: 600 17px 'Space Grotesk', sans-serif">Add items to Pool Table 1</h2>
+<label style="display: flex; align-items: center; gap: 8px; border: 1px solid #D3D9D2; border-radius: 10px; padding: 0 12px; min-height: 44px; flex: 0 1 260px; box-sizing: border-box">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#56625B" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>
+<span style="position: absolute; left: -9999px">Search menu</span>
+<input placeholder="Search menu…" value="" style="border: 0; outline: 0; font: 400 14px Inter, sans-serif; flex: 1; min-width: 0; background: transparent">
+</label>
+</div>
+<div class="seg" role="group" aria-label="Category" style="display: flex; flex-wrap: wrap; gap: 6px">
+<button style="min-height: 36px; padding: 0 16px; border-radius: 18px; cursor: pointer; font: 500 13px Inter, sans-serif; background: #14201A; color: #FFFFFF; border: 1px solid #14201A">All</button><button style="min-height: 36px; padding: 0 16px; border-radius: 18px; cursor: pointer; font: 500 13px Inter, sans-serif; background: #FFFFFF; color: #3E4A44; border: 1px solid #D3D9D2">Food</button><button style="min-height: 36px; padding: 0 16px; border-radius: 18px; cursor: pointer; font: 500 13px Inter, sans-serif; background: #FFFFFF; color: #3E4A44; border: 1px solid #D3D9D2">Snacks</button><button style="min-height: 36px; padding: 0 16px; border-radius: 18px; cursor: pointer; font: 500 13px Inter, sans-serif; background: #FFFFFF; color: #3E4A44; border: 1px solid #D3D9D2">Drinks</button>
+</div>
+<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px">
+
+<button style="text-align: left; background: #FAFBF9; border: 1px solid #E1E5E0; border-radius: 12px; padding: 12px 14px; min-height: 76px; cursor: pointer; display: flex; flex-direction: column; justify-content: space-between; gap: 6px; font-family: Inter, sans-serif; color: #16201B">
+<span style="font-size: 14px; font-weight: 500; line-height: 1.3">Chicken momo (8 pc)</span>
+<span style="display: flex; justify-content: space-between; width: 100%; align-items: center"><span class="num" style="font-weight: 700; font-size: 14px">₹120</span><span style="font-size: 12px; color: #56625B">Food</span></span>
+</button>
+
+<button style="text-align: left; background: #FAFBF9; border: 1px solid #E1E5E0; border-radius: 12px; padding: 12px 14px; min-height: 76px; cursor: pointer; display: flex; flex-direction: column; justify-content: space-between; gap: 6px; font-family: Inter, sans-serif; color: #16201B">
+<span style="font-size: 14px; font-weight: 500; line-height: 1.3">Pork chowmein</span>
+<span style="display: flex; justify-content: space-between; width: 100%; align-items: center"><span class="num" style="font-weight: 700; font-size: 14px">₹150</span><span style="font-size: 12px; color: #56625B">Food</span></span>
+</button>
+
+<button style="text-align: left; background: #FAFBF9; border: 1px solid #E1E5E0; border-radius: 12px; padding: 12px 14px; min-height: 76px; cursor: pointer; display: flex; flex-direction: column; justify-content: space-between; gap: 6px; font-family: Inter, sans-serif; color: #16201B">
+<span style="font-size: 14px; font-weight: 500; line-height: 1.3">Veg thali</span>
+<span style="display: flex; justify-content: space-between; width: 100%; align-items: center"><span class="num" style="font-weight: 700; font-size: 14px">₹180</span><span style="font-size: 12px; color: #56625B">Food</span></span>
+</button>
+
+<button style="text-align: left; background: #FAFBF9; border: 1px solid #E1E5E0; border-radius: 12px; padding: 12px 14px; min-height: 76px; cursor: pointer; display: flex; flex-direction: column; justify-content: space-between; gap: 6px; font-family: Inter, sans-serif; color: #16201B">
+<span style="font-size: 14px; font-weight: 500; line-height: 1.3">Pork ribs</span>
+<span style="display: flex; justify-content: space-between; width: 100%; align-items: center"><span class="num" style="font-weight: 700; font-size: 14px">₹320</span><span style="font-size: 12px; color: #56625B">Food</span></span>
+</button>
+
+<button style="text-align: left; background: #FAFBF9; border: 1px solid #E1E5E0; border-radius: 12px; padding: 12px 14px; min-height: 76px; cursor: pointer; display: flex; flex-direction: column; justify-content: space-between; gap: 6px; font-family: Inter, sans-serif; color: #16201B">
+<span style="font-size: 14px; font-weight: 500; line-height: 1.3">French fries</span>
+<span style="display: flex; justify-content: space-between; width: 100%; align-items: center"><span class="num" style="font-weight: 700; font-size: 14px">₹90</span><span style="font-size: 12px; color: #56625B">Snacks</span></span>
+</button>
+
+<button style="text-align: left; background: #FAFBF9; border: 1px solid #E1E5E0; border-radius: 12px; padding: 12px 14px; min-height: 76px; cursor: pointer; display: flex; flex-direction: column; justify-content: space-between; gap: 6px; font-family: Inter, sans-serif; color: #16201B">
+<span style="font-size: 14px; font-weight: 500; line-height: 1.3">Loaded nachos</span>
+<span style="display: flex; justify-content: space-between; width: 100%; align-items: center"><span class="num" style="font-weight: 700; font-size: 14px">₹160</span><span style="font-size: 12px; color: #56625B">Snacks</span></span>
+</button>
+
+<button style="text-align: left; background: #FAFBF9; border: 1px solid #E1E5E0; border-radius: 12px; padding: 12px 14px; min-height: 76px; cursor: pointer; display: flex; flex-direction: column; justify-content: space-between; gap: 6px; font-family: Inter, sans-serif; color: #16201B">
+<span style="font-size: 14px; font-weight: 500; line-height: 1.3">Chicken wings (6)</span>
+<span style="display: flex; justify-content: space-between; width: 100%; align-items: center"><span class="num" style="font-weight: 700; font-size: 14px">₹220</span><span style="font-size: 12px; color: #56625B">Snacks</span></span>
+</button>
+
+<button style="text-align: left; background: #FAFBF9; border: 1px solid #E1E5E0; border-radius: 12px; padding: 12px 14px; min-height: 76px; cursor: pointer; display: flex; flex-direction: column; justify-content: space-between; gap: 6px; font-family: Inter, sans-serif; color: #16201B">
+<span style="font-size: 14px; font-weight: 500; line-height: 1.3">Cold coffee</span>
+<span style="display: flex; justify-content: space-between; width: 100%; align-items: center"><span class="num" style="font-weight: 700; font-size: 14px">₹100</span><span style="font-size: 12px; color: #56625B">Drinks</span></span>
+</button>
+
+<button style="text-align: left; background: #FAFBF9; border: 1px solid #E1E5E0; border-radius: 12px; padding: 12px 14px; min-height: 76px; cursor: pointer; display: flex; flex-direction: column; justify-content: space-between; gap: 6px; font-family: Inter, sans-serif; color: #16201B">
+<span style="font-size: 14px; font-weight: 500; line-height: 1.3">Fresh lime soda</span>
+<span style="display: flex; justify-content: space-between; width: 100%; align-items: center"><span class="num" style="font-weight: 700; font-size: 14px">₹60</span><span style="font-size: 12px; color: #56625B">Drinks</span></span>
+</button>
+
+<button style="text-align: left; background: #FAFBF9; border: 1px solid #E1E5E0; border-radius: 12px; padding: 12px 14px; min-height: 76px; cursor: pointer; display: flex; flex-direction: column; justify-content: space-between; gap: 6px; font-family: Inter, sans-serif; color: #16201B">
+<span style="font-size: 14px; font-weight: 500; line-height: 1.3">Coke (300 ml)</span>
+<span style="display: flex; justify-content: space-between; width: 100%; align-items: center"><span class="num" style="font-weight: 700; font-size: 14px">₹40</span><span style="font-size: 12px; color: #56625B">Drinks</span></span>
+</button>
+
+<button style="text-align: left; background: #FAFBF9; border: 1px solid #E1E5E0; border-radius: 12px; padding: 12px 14px; min-height: 76px; cursor: pointer; display: flex; flex-direction: column; justify-content: space-between; gap: 6px; font-family: Inter, sans-serif; color: #16201B">
+<span style="font-size: 14px; font-weight: 500; line-height: 1.3">Masala tea</span>
+<span style="display: flex; justify-content: space-between; width: 100%; align-items: center"><span class="num" style="font-weight: 700; font-size: 14px">₹30</span><span style="font-size: 12px; color: #56625B">Drinks</span></span>
+</button>
+
+<button style="text-align: left; background: #FAFBF9; border: 1px solid #E1E5E0; border-radius: 12px; padding: 12px 14px; min-height: 76px; cursor: pointer; display: flex; flex-direction: column; justify-content: space-between; gap: 6px; font-family: Inter, sans-serif; color: #16201B">
+<span style="font-size: 14px; font-weight: 500; line-height: 1.3">Oreo shake</span>
+<span style="display: flex; justify-content: space-between; width: 100%; align-items: center"><span class="num" style="font-weight: 700; font-size: 14px">₹140</span><span style="font-size: 12px; color: #56625B">Drinks</span></span>
+</button>
+
+</div>
+</section>
+</div>
+
+<aside class="card" aria-label="Current order" style="flex: 1 1 360px; min-width: 0; display: flex; flex-direction: column; overflow: hidden">
+<div style="padding: 20px; background: #14201A; color: #FFFFFF; display: flex; flex-direction: column; gap: 12px">
+<div style="display: flex; justify-content: space-between; align-items: center">
+<div><div style="font: 700 20px 'Space Grotesk', sans-serif">Pool Table 1</div><div style="font-size: 13px; color: #A9BAB1">Pool table · In play</div></div>
+<span class="num" style="font-size: 12px; color: #A9BAB1">Started 11:17 am</span>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 10px">
+<div class="num" aria-live="off" style="font: 700 44px 'Space Grotesk', sans-serif; letter-spacing: .02em">01:24:10</div>
+<div class="num" style="font-size: 13px; color: #C9D6CF">₹200/hr · billed in 15-min blocks, min 30 min · billable 90 min</div>
+<div style="display: flex; gap: 8px; flex-wrap: wrap">
+
+<button class="btn" style="background: transparent; color: #FFFFFF; border: 1px solid #50645A">Pause</button>
+
+<button class="btn" style="background: transparent; color: #FFC9C2; border: 1px solid #7A3B34">Stop timer</button>
+</div>
+</div>
+
+</div>
+
+<div style="padding: 8px 20px; flex: 1; display: flex; flex-direction: column">
+
+
+<div style="display: flex; align-items: center; gap: 10px; padding: 12px 0; border-bottom: 1px solid #EEF1ED">
+<div style="flex: 1; min-width: 0"><div style="font-size: 14px; font-weight: 500">Chicken momo (8 pc)</div><div class="num" style="font-size: 12px; color: #56625B">₹120 each</div></div>
+<div style="display: flex; align-items: center; gap: 4px">
+<button aria-label="Remove one Chicken momo (8 pc)" style="width: 32px; height: 32px; border-radius: 8px; border: 1px solid #D3D9D2; background: #FFFFFF; cursor: pointer; font-size: 16px">−</button>
+<span class="num" style="width: 26px; text-align: center; font-weight: 600">2</span>
+<button aria-label="Add one Chicken momo (8 pc)" style="width: 32px; height: 32px; border-radius: 8px; border: 1px solid #D3D9D2; background: #FFFFFF; cursor: pointer; font-size: 16px">+</button>
+</div>
+<div class="num" style="width: 72px; text-align: right; font-weight: 600; font-size: 14px">₹240</div>
+</div>
+
+<div style="display: flex; align-items: center; gap: 10px; padding: 12px 0; border-bottom: 1px solid #EEF1ED">
+<div style="flex: 1; min-width: 0"><div style="font-size: 14px; font-weight: 500">Cold coffee</div><div class="num" style="font-size: 12px; color: #56625B">₹100 each</div></div>
+<div style="display: flex; align-items: center; gap: 4px">
+<button aria-label="Remove one Cold coffee" style="width: 32px; height: 32px; border-radius: 8px; border: 1px solid #D3D9D2; background: #FFFFFF; cursor: pointer; font-size: 16px">−</button>
+<span class="num" style="width: 26px; text-align: center; font-weight: 600">2</span>
+<button aria-label="Add one Cold coffee" style="width: 32px; height: 32px; border-radius: 8px; border: 1px solid #D3D9D2; background: #FFFFFF; cursor: pointer; font-size: 16px">+</button>
+</div>
+<div class="num" style="width: 72px; text-align: right; font-weight: 600; font-size: 14px">₹200</div>
+</div>
+
+<div style="display: flex; align-items: center; gap: 10px; padding: 12px 0; border-bottom: 1px solid #EEF1ED">
+<div style="flex: 1; min-width: 0"><div style="font-size: 14px; font-weight: 500">French fries</div><div class="num" style="font-size: 12px; color: #56625B">₹90 each</div></div>
+<div style="display: flex; align-items: center; gap: 4px">
+<button aria-label="Remove one French fries" style="width: 32px; height: 32px; border-radius: 8px; border: 1px solid #D3D9D2; background: #FFFFFF; cursor: pointer; font-size: 16px">−</button>
+<span class="num" style="width: 26px; text-align: center; font-weight: 600">1</span>
+<button aria-label="Add one French fries" style="width: 32px; height: 32px; border-radius: 8px; border: 1px solid #D3D9D2; background: #FFFFFF; cursor: pointer; font-size: 16px">+</button>
+</div>
+<div class="num" style="width: 72px; text-align: right; font-weight: 600; font-size: 14px">₹90</div>
+</div>
+
+</div>
+
+<div style="padding: 16px 20px 20px; background: #FAFBF9; border-top: 1px solid #E1E5E0; display: flex; flex-direction: column; gap: 8px">
+<div style="display: flex; justify-content: space-between; font-size: 14px"><span style="color: #3E4A44">Pool table time</span><span class="num">₹300</span></div>
+<div style="display: flex; justify-content: space-between; font-size: 14px"><span style="color: #3E4A44">Food &amp; drinks</span><span class="num">₹530</span></div>
+<div style="display: flex; justify-content: space-between; font-size: 14px"><span style="color: #3E4A44">GST (est.)</span><span class="num">₹81</span></div>
+<div style="display: flex; justify-content: space-between; align-items: baseline; padding-top: 8px; border-top: 1px dashed #C9D1C8"><span style="font-weight: 600">Total</span><span class="num" style="font: 700 26px 'Space Grotesk', sans-serif">₹911</span></div>
+<div style="display: flex; gap: 10px; margin-top: 6px">
+<button class="btn btn-s" style="flex: 1; justify-content: center">Print KOT</button>
+<a class="btn btn-p" href="03-checkout-invoice.html" style="flex: 2; justify-content: center">Stop &amp; checkout</a>
+</div>
+</div>
+</aside>
+
+</main>
+</div>
+</body>
+</html>

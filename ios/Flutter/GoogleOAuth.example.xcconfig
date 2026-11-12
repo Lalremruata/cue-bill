@@ -1,0 +1,3 @@
+// Copy to GoogleOAuth.xcconfig (not committed) and fill in the iOS OAuth client's reversed client ID.
+// Example: for 1234-abcd.apps.googleusercontent.com it is com.googleusercontent.apps.1234-abcd
+GOOGLE_REVERSED_CLIENT_ID = com.googleusercontent.apps.REPLACE_ME
