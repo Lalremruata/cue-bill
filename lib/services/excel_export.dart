@@ -63,8 +63,12 @@ class ExcelExport {
   ];
 
   /// Dashboard export: daily sales and item sales for the period, one sheet each.
-  static List<int> dashboard(List<DailyRow> daily, List<SalesLine> sales, {List<String> salesHeading = const []}) =>
-      _workbook([_dailySheet(daily), _salesSheet(sales, salesHeading)]);
+  static List<int> dashboard(
+    List<DailyRow> daily,
+    List<SalesLine> sales,
+    List<DateTime> dates, {
+    List<String> salesHeading = const [],
+  }) => _workbook([_dailySheet(daily), _salesSheet(sales, dates, salesHeading)]);
 
   static List<int> items(List<ItemRow> rows, DateTime from, DateTime to) => _book(
     'Item performance',
@@ -85,26 +89,40 @@ class ExcelExport {
     ],
   );
 
-  /// Plain item sales list with a total row. Amounts are menu price, before discounts and GST.
-  static List<int> sales(List<SalesLine> lines, {List<String> heading = const []}) =>
-      _workbook([_salesSheet(lines, heading)]);
+  /// Item sales with a quantity column per date, then total qty and amount, and a total row.
+  /// Amounts are menu price, before discounts and GST.
+  static List<int> sales(List<SalesLine> lines, List<DateTime> dates, {List<String> heading = const []}) =>
+      _workbook([_salesSheet(lines, dates, heading)]);
 
-  static _Sheet _salesSheet(List<SalesLine> lines, List<String> heading) => (
-    'Item sales',
-    heading,
-    ['Item', 'Category', 'Qty', 'Unit', 'Amount'],
-    [
-      for (final l in lines)
-        [l.name, l.category ?? '', l.isPool ? l.qty : l.qty.toInt(), l.isPool ? 'h' : '', l.amount],
+  static _Sheet _salesSheet(List<SalesLine> lines, List<DateTime> dates, List<String> heading) {
+    Object qty(SalesLine l, double v) => l.isPool ? v : v.toInt();
+    double day(SalesLine l, int d) => d < l.perDay.length ? l.perDay[d] : 0;
+    final items = lines.where((l) => !l.isPool);
+    return (
+      'Item sales',
+      heading,
+      ['Item', 'Category', 'Unit', for (final d in dates) Fmt.isoDate(d), 'Total', 'Amount'],
       [
-        'Total',
-        '',
-        lines.where((l) => !l.isPool).fold<int>(0, (s, l) => s + l.qty.toInt()),
-        'items',
-        roundTo(lines.fold(0.0, (s, l) => s + l.amount), 2),
+        for (final l in lines)
+          [
+            l.name,
+            l.category ?? '',
+            l.isPool ? 'h' : '',
+            for (var d = 0; d < dates.length; d++) qty(l, day(l, d)),
+            qty(l, l.qty),
+            l.amount,
+          ],
+        [
+          'Total',
+          '',
+          'items',
+          for (var d = 0; d < dates.length; d++) items.fold<int>(0, (s, l) => s + day(l, d).toInt()),
+          items.fold<int>(0, (s, l) => s + l.qty.toInt()),
+          roundTo(lines.fold(0.0, (s, l) => s + l.amount), 2),
+        ],
       ],
-    ],
-  );
+    );
+  }
 
   static List<int> daily(List<DailyRow> rows) => _workbook([_dailySheet(rows)]);
 

@@ -98,6 +98,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
     final bytes = switch (_tab) {
       _Tab.sales => ExcelExport.sales(
         a.sales(categoryType: _type),
+        a.dates,
         heading: ExcelExport.salesHeading(
           shop: context.read<AppStore>().settings.name,
           from: _from,
@@ -130,82 +131,79 @@ class _ReportsScreenState extends State<ReportsScreen> {
             ('Margin', Fmt.percent(s.margin)),
             ('Invoices', '${s.invoices}'),
           ];
-    final (headers, rows, right) = switch (_tab) {
-      _Tab.sales => (
-        ['Item', 'Category', 'Qty', 'Amount'],
-        [
-          for (final l in sales) [l.name, l.category ?? '', l.qtyLabel, Fmt.inr(l.amount)],
-          if (sales.isNotEmpty) ['Total', '', '${_itemsSold(sales)} items', Fmt.inr(_salesTotal(sales))],
-        ],
-        {2, 3},
-      ),
-      _Tab.items => (
-        ['Item', 'Category', 'Qty', 'Revenue', 'Cost', 'Profit', 'Margin', 'Rating'],
-        [
-          for (final r in a.items(categoryType: _type, sort: _sort))
-            [
-              r.name,
-              r.category ?? '',
-              r.qtyLabel,
-              Fmt.inr(r.revenue),
-              Fmt.inr(r.cost),
-              Fmt.inr(r.profit),
-              Fmt.percent(r.margin, 0),
-              r.rating.label,
-            ],
-        ],
-        {2, 3, 4, 5, 6},
-      ),
-      _Tab.daily => (
-        [
-          'Date',
-          'Invoices',
-          'Pool h',
-          'Pool',
-          'Food',
-          'Drinks',
-          'Snacks',
-          'Dine-in',
-          'Takeaway',
-          'Collected',
-          'Profit',
-          'Margin',
-        ],
-        [
-          for (final r in a.daily().reversed)
-            [
-              Fmt.date(r.date),
-              '${r.invoices}',
-              Fmt.trim(r.poolHours, 1),
-              Fmt.inr(r.pool),
-              Fmt.inr(r.food),
-              Fmt.inr(r.drinks),
-              Fmt.inr(r.snacks),
-              Fmt.inr(r.dineIn),
-              Fmt.inr(r.takeaway),
-              Fmt.inr(r.collected),
-              Fmt.inr(r.profit),
-              Fmt.percent(r.margin, 0),
-            ],
-        ],
-        {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11},
-      ),
-      _Tab.invoices => (
-        ['Invoice', 'Date & time', 'Table', 'Paid by', 'Amount'],
-        [
-          for (final i in a.invoices)
-            [i.number, Fmt.invoiceDate(i.paidAt), i.tableName, i.paymentLabel, Fmt.inr(i.total)],
-        ],
-        {4},
-      ),
+    final List<ReportTable> tables = switch (_tab) {
+      _Tab.sales => _salesPdfTables(a.dates, sales),
+      _Tab.items => [
+        (
+          ['Item', 'Category', 'Qty', 'Revenue', 'Cost', 'Profit', 'Margin', 'Rating'],
+          [
+            for (final r in a.items(categoryType: _type, sort: _sort))
+              [
+                r.name,
+                r.category ?? '',
+                r.qtyLabel,
+                Fmt.inr(r.revenue),
+                Fmt.inr(r.cost),
+                Fmt.inr(r.profit),
+                Fmt.percent(r.margin, 0),
+                r.rating.label,
+              ],
+          ],
+          {2, 3, 4, 5, 6},
+        ),
+      ],
+      _Tab.daily => [
+        (
+          [
+            'Date',
+            'Invoices',
+            'Pool h',
+            'Pool',
+            'Food',
+            'Drinks',
+            'Snacks',
+            'Dine-in',
+            'Takeaway',
+            'Collected',
+            'Profit',
+            'Margin',
+          ],
+          [
+            for (final r in a.daily().reversed)
+              [
+                Fmt.date(r.date),
+                '${r.invoices}',
+                Fmt.trim(r.poolHours, 1),
+                Fmt.inr(r.pool),
+                Fmt.inr(r.food),
+                Fmt.inr(r.drinks),
+                Fmt.inr(r.snacks),
+                Fmt.inr(r.dineIn),
+                Fmt.inr(r.takeaway),
+                Fmt.inr(r.collected),
+                Fmt.inr(r.profit),
+                Fmt.percent(r.margin, 0),
+              ],
+          ],
+          {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11},
+        ),
+      ],
+      _Tab.invoices => [
+        (
+          ['Invoice', 'Date & time', 'Table', 'Paid by', 'Amount'],
+          [
+            for (final i in a.invoices)
+              [i.number, Fmt.invoiceDate(i.paidAt), i.tableName, i.paymentLabel, Fmt.inr(i.total)],
+          ],
+          {4},
+        ),
+      ],
     };
     final bytes = await ReportPdf.build(
       title: 'Sales report · ${_tab.label}${_tab == _Tab.sales && _type != null ? ' · ${_types[_type]} only' : ''}',
       subtitle: '${context.read<AppStore>().settings.name} · $_rangeLabel',
       kpis: kpis,
-      headers: headers,
-      rows: rows,
-      rightAligned: right,
+      tables: tables,
     );
     if (mounted) await Files.printPdf(context, bytes, _fileStem);
   }
@@ -396,6 +394,47 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
   static int _itemsSold(List<SalesLine> lines) => lines.where((l) => !l.isPool).fold(0, (s, l) => s + l.qty.toInt());
 
+  /// Menu items (not pool time) sold on day [d] of the period.
+  static int _itemsSoldOn(List<SalesLine> lines, int d) =>
+      lines.where((l) => !l.isPool && d < l.perDay.length).fold(0, (s, l) => s + l.perDay[d].toInt());
+
+  /// Dates that fit across one A4 landscape table; longer ranges are split into blocks.
+  static const _pdfDaysPerTable = 14;
+
+  /// Item sales for the PDF: item and a quantity column per date, in blocks of [_pdfDaysPerTable]
+  /// dates. The last block ends with the total quantity and amount.
+  static List<ReportTable> _salesPdfTables(List<DateTime> dates, List<SalesLine> lines) {
+    final tables = <ReportTable>[];
+    for (var start = 0; start < dates.length; start += _pdfDaysPerTable) {
+      final end = (start + _pdfDaysPerTable).clamp(0, dates.length);
+      final last = end == dates.length;
+      final days = [for (var d = start; d < end; d++) d];
+      tables.add((
+        [
+          'Item',
+          for (final d in days) Fmt.shortDate(dates[d]),
+          if (last) ...['Total', 'Amount'],
+        ],
+        [
+          for (final l in lines)
+            [
+              l.name,
+              for (final d in days) l.dayLabel(d),
+              if (last) ...[l.qtyLabel, Fmt.inr(l.amount)],
+            ],
+          if (lines.isNotEmpty)
+            [
+              'Total items',
+              for (final d in days) '${_itemsSoldOn(lines, d)}',
+              if (last) ...['${_itemsSold(lines)}', Fmt.inr(_salesTotal(lines))],
+            ],
+        ],
+        {for (var c = 1; c <= days.length + (last ? 2 : 0); c++) c},
+      ));
+    }
+    return tables;
+  }
+
   static double _salesTotal(List<SalesLine> lines) => lines.fold(0.0, (s, l) => s + l.amount);
 
   Widget _typeChips() {
@@ -411,6 +450,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
   Widget _salesTab(BuildContext context, SalesAnalytics a) {
     final lines = a.sales(categoryType: _type);
+    final dates = a.dates;
+    final muted = context.cb.muted;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -421,31 +462,38 @@ class _ReportsScreenState extends State<ReportsScreen> {
           style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15, color: context.cb.ink),
         ),
         const SizedBox(height: 2),
-        Text('Amounts are at menu price, before bill discounts and GST.', style: CbText.muted(context)),
+        Text(
+          'Quantity sold each day. Amounts are at menu price, before bill discounts and GST.',
+          style: CbText.muted(context),
+        ),
         const SizedBox(height: 12),
         CbTable(
-          minWidth: 560,
+          minWidth: 200 + 130 + dates.length * 72 + 90 + 110,
           rowHeight: 44,
           empty: 'Nothing sold in this period.',
-          columns: const [
-            Col('Item', flex: 5),
-            Col('Category', flex: 3),
-            Col('Qty', flex: 2, right: true),
-            Col('Amount', flex: 3, right: true),
+          columns: [
+            const Col('Item', width: 200),
+            const Col('Category', width: 130),
+            for (final d in dates) Col(Fmt.shortDate(d), width: 72, right: true),
+            const Col('Total', width: 90, right: true),
+            const Col('Amount', width: 110, right: true),
           ],
           rows: [
             for (final l in lines)
               [
                 Text(l.name, overflow: TextOverflow.ellipsis),
-                Text(l.category ?? '', style: CbText.muted(context, 14)),
-                NumText(l.qtyLabel),
+                Text(l.category ?? '', style: CbText.muted(context, 14), overflow: TextOverflow.ellipsis),
+                for (var d = 0; d < dates.length; d++)
+                  NumText(l.dayLabel(d), color: d < l.perDay.length && l.perDay[d] > 0 ? null : muted),
+                NumText(l.qtyLabel, bold: true),
                 NumText(Fmt.inr(l.amount)),
               ],
             if (lines.isNotEmpty)
               [
-                const Text('Total', style: TextStyle(fontWeight: FontWeight.w700)),
+                const Text('Total items', style: TextStyle(fontWeight: FontWeight.w700)),
                 const SizedBox(),
-                NumText('${_itemsSold(lines)} items', bold: true),
+                for (var d = 0; d < dates.length; d++) NumText('${_itemsSoldOn(lines, d)}', bold: true),
+                NumText('${_itemsSold(lines)}', bold: true),
                 NumText(Fmt.inr(_salesTotal(lines)), bold: true),
               ],
           ],

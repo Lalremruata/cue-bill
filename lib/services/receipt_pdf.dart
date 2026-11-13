@@ -255,17 +255,19 @@ class ReceiptPdf {
   }
 }
 
+/// One table in a report: column headers, rows, and the indexes of right-aligned columns.
+typedef ReportTable = (List<String> headers, List<List<String>> rows, Set<int> rightAligned);
+
 /// A plain tabular report (Reports → Print / Save PDF).
 class ReportPdf {
   ReportPdf._();
 
+  /// [tables] are drawn one after another, e.g. a wide table split into blocks of columns.
   static Future<Uint8List> build({
     required String title,
     required String subtitle,
     required List<(String, String)> kpis,
-    required List<String> headers,
-    required List<List<String>> rows,
-    Set<int> rightAligned = const {},
+    required List<ReportTable> tables,
   }) async {
     final theme = await PdfFonts.theme();
     final doc = pw.Document(title: title, theme: theme);
@@ -302,22 +304,24 @@ class ReportPdf {
                 ),
             ],
           ),
-          pw.SizedBox(height: 12),
-          pw.TableHelper.fromTextArray(
-            headers: headers,
-            data: rows,
-            border: null,
-            headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 8, color: muted),
-            headerDecoration: const pw.BoxDecoration(border: pw.Border(bottom: pw.BorderSide(width: 0.6))),
-            rowDecoration: const pw.BoxDecoration(
-              border: pw.Border(bottom: pw.BorderSide(width: 0.3, color: PdfColor.fromInt(0xFFE1E5E0))),
+          for (final (headers, rows, rightAligned) in tables) ...[
+            pw.SizedBox(height: 12),
+            pw.TableHelper.fromTextArray(
+              headers: headers,
+              data: rows,
+              border: null,
+              headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 8, color: muted),
+              headerDecoration: const pw.BoxDecoration(border: pw.Border(bottom: pw.BorderSide(width: 0.6))),
+              rowDecoration: const pw.BoxDecoration(
+                border: pw.Border(bottom: pw.BorderSide(width: 0.3, color: PdfColor.fromInt(0xFFE1E5E0))),
+              ),
+              cellPadding: const pw.EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+              headerAlignments: {for (final i in rightAligned) i: pw.Alignment.centerRight},
+              cellAlignments: {for (final i in rightAligned) i: pw.Alignment.centerRight},
+              headerAlignment: pw.Alignment.centerLeft,
+              cellAlignment: pw.Alignment.centerLeft,
             ),
-            cellPadding: const pw.EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-            headerAlignments: {for (final i in rightAligned) i: pw.Alignment.centerRight},
-            cellAlignments: {for (final i in rightAligned) i: pw.Alignment.centerRight},
-            headerAlignment: pw.Alignment.centerLeft,
-            cellAlignment: pw.Alignment.centerLeft,
-          ),
+          ],
         ],
       ),
     );
