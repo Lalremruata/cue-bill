@@ -30,7 +30,7 @@ class DemoSales {
     const unpopular = {'Grilled fish platter', 'Veg club sandwich', 'Hot chocolate'};
     final popular = items.where((m) => !unpopular.contains(m.name)).toList();
     final pool = store.tables.where((t) => t.isPool).toList();
-    final dining = store.tables.where((t) => !t.isPool).toList();
+    final dining = store.tables.where((t) => !t.isPool && !t.isTakeaway).toList();
     final now = DateTime.now();
     final business = jsonEncode(settings.snapshot().toJson());
 
@@ -46,19 +46,24 @@ class DemoSales {
       }
 
       for (var day = days - 1; day >= 0; day--) {
+        var takeawayNo = 0;
         final date = DateTime(now.year, now.month, now.day - day);
         final weekend = date.weekday >= DateTime.friday;
         final bills = rand(14, 22) + (weekend ? 10 : 0);
 
         for (var b = 0; b < bills; b++) {
           final isPool = pool.isNotEmpty && rand(1, 100) <= 40;
-          if (!isPool && dining.isEmpty) continue;
+          final isTakeaway = !isPool && (dining.isEmpty || rand(1, 100) <= 30);
           final hour = isPool
               ? weighted({12: 1, 13: 1, 14: 2, 15: 2, 16: 4, 17: 6, 18: 8, 19: 10, 20: 10, 21: 8, 22: 5})
               : weighted({12: 6, 13: 7, 14: 4, 15: 3, 16: 3, 17: 4, 18: 6, 19: 8, 20: 7, 21: 4, 22: 2});
           final start = DateTime(date.year, date.month, date.day, hour, rand(0, 59));
           if (start.isAfter(now)) continue;
-          final table = isPool ? pick(pool) : pick(dining);
+          final tableName = isPool
+              ? pick(pool).name
+              : isTakeaway
+              ? 'Takeaway #${++takeawayNo}'
+              : pick(dining).name;
 
           final played = isPool ? rand(25, 150) : 0;
           final billed = isPool
@@ -107,7 +112,8 @@ class DemoSales {
 
           final invoiceId = await txn.insert('invoices', {
             'number': settings.invoiceNumber(n++),
-            'table_name': table.name,
+            'table_name': tableName,
+            'order_type': isTakeaway ? 'takeaway' : 'dine_in',
             'payment_method': payment,
             'pool_started_at': isPool ? start.millisecondsSinceEpoch : null,
             'pool_ended_at': isPool ? start.add(Duration(minutes: played)).millisecondsSinceEpoch : null,

@@ -58,6 +58,16 @@ The app needs your own Google sign-in keys. Without them, the Drive card says "n
 
 **App ID.** The Android and iOS clients are tied to the app ID. If you change it later from `com.example.*`, create new Android and iOS clients for the new ID.
 
+## Windows installer
+
+`windows/installer/cuebill.iss` builds a single `CueBill-Setup-<version>.exe` that installs CueBill with Start menu and desktop shortcuts and an uninstaller. On a Windows PC with Flutter, Visual Studio ("Desktop development with C++") and [Inno Setup 6.3+](https://jrsoftware.org/isinfo.php):
+
+1. `flutter build windows --release` (add `--dart-define-from-file=google_oauth.json` for Drive backups).
+2. Download [`vc_redist.x64.exe`](https://aka.ms/vs/17/release/vc_redist.x64.exe) into `windows/installer/`. The setup then installs the Visual C++ runtime on PCs that lack it; without it CueBill won't start there. The file is in `.gitignore`.
+3. Compile the script in Inno Setup, or run `"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" windows\installer\cuebill.iss`.
+
+The setup file is written to `build\windows\installer\`. Its version comes from `version:` in `pubspec.yaml`, so raise that before building an update. Installing a newer setup over an old one updates CueBill in place. Sales data is kept in `%APPDATA%`, so updates and uninstalling don't remove it.
+
 ## Code map
 
 ```

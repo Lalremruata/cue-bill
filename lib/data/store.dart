@@ -67,7 +67,12 @@ class AppStore extends ChangeNotifier {
         : BusinessSettings.fromJson((jsonDecode(s.first['data'] as String) as Map).cast<String, Object?>());
     categories = (await _db.query('categories', orderBy: 'sort, name')).map(MenuCategory.fromRow).toList();
     menu = (await _db.query('menu_items', orderBy: 'name')).map(MenuItem.fromRow).toList();
-    tables = (await _db.query('restaurant_tables', orderBy: 'sort, name')).map(RestaurantTable.fromRow).toList();
+    // Billed takeaway orders stay in the database but are not loaded.
+    tables = (await _db.query(
+      'restaurant_tables',
+      where: "type != 'takeaway' OR is_active = 1",
+      orderBy: 'sort, name',
+    )).map(RestaurantTable.fromRow).toList();
 
     _sessions.clear();
     final open = await _db.query('table_sessions', where: "status = 'open'", orderBy: 'id');
@@ -102,17 +107,21 @@ class AppStore extends ChangeNotifier {
   Map<int, MenuCategory> get categoryById => {for (final c in categories) c.id!: c};
   RestaurantTable? tableById(int? id) => tables.where((t) => t.id == id).firstOrNull;
 
-  static const _typeOrder = {'pool': 0, 'dining': 1, 'takeaway': 2};
+  static const _typeOrder = {'pool': 0, 'dining': 1};
 
-  /// Active tables: pool first, then dining, then takeaway.
+  /// Active tables: pool first, then dining. Takeaway orders are in [takeawayOrders].
   List<RestaurantTable> get activeTables {
-    final list = tables.where((t) => t.isActive).toList();
+    final list = tables.where((t) => t.isActive && !t.isTakeaway).toList();
     list.sort((a, b) {
       final t = (_typeOrder[a.type] ?? 9).compareTo(_typeOrder[b.type] ?? 9);
       return t != 0 ? t : a.sort.compareTo(b.sort);
     });
     return list;
   }
+
+  /// Takeaway orders not yet billed, oldest first.
+  List<RestaurantTable> get takeawayOrders =>
+      tables.where((t) => t.isTakeaway && t.isActive).toList()..sort((a, b) => a.id!.compareTo(b.id!));
 
   /// Menu items sorted by category order, then name.
   List<MenuItem> get sortedMenu {
@@ -144,6 +153,38 @@ class AppStore extends ChangeNotifier {
   }
 
   // ------------------------------------------------------- timer and orders
+
+  /// Starts a takeaway order: no table, no pool timer. Orders are numbered Takeaway #1, #2, …
+  /// from 1 each day. Each is billed or cleared on its own, then put away.
+  Future<RestaurantTable> newTakeaway() async {
+    final today = startOfDay(DateTime.now()).millisecondsSinceEpoch;
+    late RestaurantTable table;
+    late TableSession session;
+    await _db.transaction((txn) async {
+      final started = Sqflite.firstIntValue(
+        await txn.rawQuery(
+          '''SELECT COUNT(*) FROM table_sessions ts
+             JOIN restaurant_tables rt ON rt.id = ts.restaurant_table_id
+             WHERE rt.type = 'takeaway' AND ts.created_at >= ?''',
+          [today],
+        ),
+      );
+      table = RestaurantTable(name: 'Takeaway #${(started ?? 0) + 1}', type: 'takeaway');
+      table.id = await txn.insert('restaurant_tables', table.toRow()..remove('id'));
+      session = TableSession(tableId: table.id!);
+      session.id = await txn.insert('table_sessions', session.toRow()..remove('id'));
+    });
+    tables.add(table);
+    _sessions[table.id!] = session;
+    notifyListeners();
+    return table;
+  }
+
+  /// A billed or cleared takeaway order is put away; its invoice keeps the name.
+  Future<void> _putAwayTakeaway(DatabaseExecutor db, RestaurantTable table) async {
+    if (!table.isTakeaway) return;
+    await db.update('restaurant_tables', {'is_active': 0}, where: 'id = ?', whereArgs: [table.id]);
+  }
 
   Future<TableSession> ensureSession(RestaurantTable table) async {
     final existing = _sessions[table.id];
@@ -348,8 +389,10 @@ class AppStore extends ChangeNotifier {
         where: 'id = ?',
         whereArgs: [s.id],
       );
+      await _putAwayTakeaway(txn, table);
     });
     _sessions.remove(table.id);
+    if (table.isTakeaway) tables.removeWhere((t) => t.id == table.id);
     notifyListeners();
   }
 
@@ -391,6 +434,7 @@ class AppStore extends ChangeNotifier {
         number: number,
         tableSessionId: session.id,
         tableName: table.name,
+        orderType: table.orderType,
         customerName: clean(options.customerName),
         customerPhone: clean(options.customerPhone),
         paymentMethod: options.paymentMethod,
@@ -432,10 +476,12 @@ class AppStore extends ChangeNotifier {
         where: 'id = ?',
         whereArgs: [session.id],
       );
+      await _putAwayTakeaway(txn, table);
       settings.nextInvoiceNumber = current.nextInvoiceNumber;
     });
 
     _sessions.remove(table.id);
+    if (table.isTakeaway) tables.removeWhere((t) => t.id == table.id);
     invoiceCount++;
     revision++;
     notifyListeners();
@@ -466,12 +512,16 @@ class AppStore extends ChangeNotifier {
     return invoices;
   }
 
-  Future<List<Invoice>> invoicesBetween(DateTime from, DateTime to, {String? payment}) async {
+  Future<List<Invoice>> invoicesBetween(DateTime from, DateTime to, {String? payment, String? orderType}) async {
     final where = StringBuffer('paid_at BETWEEN ? AND ?');
     final args = <Object>[startOfDay(from).millisecondsSinceEpoch, endOfDay(to).millisecondsSinceEpoch];
     if (payment != null) {
       where.write(' AND payment_method = ?');
       args.add(payment);
+    }
+    if (orderType != null) {
+      where.write(' AND order_type = ?');
+      args.add(orderType);
     }
     final rows = await _db.query('invoices', where: where.toString(), whereArgs: args, orderBy: 'paid_at DESC');
     return _withItems(rows);
@@ -490,12 +540,13 @@ class AppStore extends ChangeNotifier {
     return _withItems(rows);
   }
 
-  Future<SalesAnalytics> analytics(DateTime from, DateTime to, {String? payment}) async {
+  Future<SalesAnalytics> analytics(DateTime from, DateTime to, {String? payment, String? orderType}) async {
     return SalesAnalytics(
       from: from,
       to: to,
       payment: payment,
-      invoices: await invoicesBetween(from, to, payment: payment),
+      orderType: orderType,
+      invoices: await invoicesBetween(from, to, payment: payment, orderType: orderType),
       activeMenu: menu.where((m) => m.isActive).toList(),
       categories: categoryById,
       poolTables: poolTableCount,

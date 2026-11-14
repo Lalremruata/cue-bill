@@ -538,7 +538,7 @@ class _TablesCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final store = context.watch<AppStore>();
-    final tables = store.tables;
+    final tables = store.tables.where((t) => !t.isTakeaway).toList();
     return CbCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
