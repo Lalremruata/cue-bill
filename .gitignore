@@ -47,3 +47,6 @@ app.*.map.json
 # Google OAuth client IDs for Drive backups (see README)
 /google_oauth.json
 /ios/Flutter/GoogleOAuth.xcconfig
+
+# Microsoft VC++ runtime installer for the Windows setup (download it; do not commit)
+windows/installer/vc_redist.x64.exe
