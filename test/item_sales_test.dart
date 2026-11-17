@@ -19,22 +19,27 @@ void main() {
     amount: qty * price,
   );
 
-  Invoice invoice(List<InvoiceItem> items, {int poolMinutes = 0, double poolAmount = 0, String pay = 'cash'}) =>
-      Invoice(
-        number: 'INV-1',
-        tableName: 'Table 1',
-        paymentMethod: pay,
-        poolBilledMinutes: poolMinutes,
-        poolAmount: poolAmount,
-        total: 0,
-        business: business,
-        paidAt: day,
-        items: items,
-      );
+  Invoice invoice(
+    List<InvoiceItem> items, {
+    int poolMinutes = 0,
+    double poolAmount = 0,
+    String pay = 'cash',
+    DateTime? at,
+  }) => Invoice(
+    number: 'INV-1',
+    tableName: 'Table 1',
+    paymentMethod: pay,
+    poolBilledMinutes: poolMinutes,
+    poolAmount: poolAmount,
+    total: 0,
+    business: business,
+    paidAt: at ?? day,
+    items: items,
+  );
 
-  SalesAnalytics analytics(List<Invoice> invoices, {String? payment}) => SalesAnalytics(
-    from: day,
-    to: day,
+  SalesAnalytics analytics(List<Invoice> invoices, {String? payment, DateTime? from, DateTime? to}) => SalesAnalytics(
+    from: from ?? day,
+    to: to ?? day,
     invoices: invoices,
     activeMenu: [MenuItem(id: 9, categoryId: 2, name: 'Never sold', price: 50)],
     categories: {
@@ -74,18 +79,52 @@ void main() {
   });
 
   test('Excel export ends with a total row', () {
-    final book = xl.Excel.decodeBytes(ExcelExport.sales(analytics(invoices).sales()));
+    final a = analytics(invoices);
+    final book = xl.Excel.decodeBytes(ExcelExport.sales(a.sales(), a.dates));
     final rows = book['Item sales'].rows;
-    expect([for (final c in rows.first) c?.value.toString()], ['Item', 'Category', 'Qty', 'Unit', 'Amount']);
+    expect(
+      [for (final c in rows.first) c?.value.toString()],
+      ['Item', 'Category', 'Unit', '2026-11-10', 'Total', 'Amount'],
+    );
     final total = [for (final c in rows.last) c?.value.toString()];
     expect(total[0], 'Total');
-    expect(total[2], '11');
-    expect(double.parse(total[4]!), 760);
+    expect(total[3], '11');
+    expect(total[4], '11');
+    expect(double.parse(total[5]!), 760);
+  });
+
+  test('item sales has a quantity for each day of the period', () {
+    final day1 = DateTime(2026, 11, 8, 20);
+    final day3 = DateTime(2026, 11, 10, 13);
+    final a = analytics(
+      [
+        invoice([item(1, 'Coke', 'Drinks', 'drinks', 2, 40)], poolMinutes: 90, poolAmount: 300, at: day1),
+        invoice([item(1, 'Coke', 'Drinks', 'drinks', 3, 40), item(3, 'Water', 'Drinks', 'drinks', 1, 20)], at: day3),
+        invoice([], poolMinutes: 60, poolAmount: 200, at: day3),
+      ],
+      from: day1,
+      to: day3,
+    );
+    expect(a.dates, [DateTime(2026, 11, 8), DateTime(2026, 11, 9), DateTime(2026, 11, 10)]);
+
+    final lines = {for (final l in a.sales()) l.name: l};
+    expect(lines['Pool table']!.perDay, [1.5, 0, 1]);
+    expect([for (var d = 0; d < 3; d++) lines['Pool table']!.dayLabel(d)], ['1.5 h', '0 h', '1 h']);
+    expect(lines['Coke']!.perDay, [2, 0, 3]);
+    expect(lines['Coke']!.qty, 5);
+    expect(lines['Water']!.perDay, [0, 0, 1]);
+
+    final rows = xl.Excel.decodeBytes(ExcelExport.sales(a.sales(), a.dates))['Item sales'].rows;
+    List<String?> row(int r) => [for (final c in rows[r]) c?.value.toString()];
+    expect(row(0), ['Item', 'Category', 'Unit', '2026-11-08', '2026-11-09', '2026-11-10', 'Total', 'Amount']);
+    expect(row(1).sublist(0, 7), ['Pool table', 'Pool table', 'h', '1.5', '0', '1', '2.5']);
+    expect(row(2).sublist(0, 7), ['Coke', 'Drinks', '', '2', '0', '3', '5']);
+    expect(row(rows.length - 1).sublist(0, 7), ['Total', '', 'items', '2', '0', '4', '6']);
   });
 
   test('Dashboard export has a daily sales sheet and an item sales sheet', () {
     final a = analytics(invoices);
-    final book = xl.Excel.decodeBytes(ExcelExport.dashboard(a.daily(), a.sales()));
+    final book = xl.Excel.decodeBytes(ExcelExport.dashboard(a.daily(), a.sales(), a.dates));
     expect(book.tables.keys, containsAll(['Daily sales', 'Item sales']));
     expect(book.tables.length, 2);
     expect(book['Item sales'].rows[1].first?.value.toString(), 'Pool table');
@@ -105,8 +144,8 @@ void main() {
 
     final a = analytics(invoices);
     for (final bytes in [
-      ExcelExport.sales(a.sales(), heading: heading),
-      ExcelExport.dashboard(a.daily(), a.sales(), salesHeading: heading),
+      ExcelExport.sales(a.sales(), a.dates, heading: heading),
+      ExcelExport.dashboard(a.daily(), a.sales(), a.dates, salesHeading: heading),
     ]) {
       final rows = xl.Excel.decodeBytes(bytes)['Item sales'].rows;
       String? cell(int r) => rows[r].first?.value.toString();

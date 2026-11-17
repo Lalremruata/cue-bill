@@ -43,6 +43,8 @@ class DailyRow {
     required this.food,
     required this.drinks,
     required this.snacks,
+    required this.dineIn,
+    required this.takeaway,
     required this.revenue,
     required this.collected,
     required this.profit,
@@ -56,6 +58,10 @@ class DailyRow {
   final double food;
   final double drinks;
   final double snacks;
+
+  /// Menu item sales after discount, before GST (pool time not included).
+  final double dineIn;
+  final double takeaway;
   final double revenue;
   final double collected;
   final double profit;
@@ -119,7 +125,14 @@ class ItemRow {
 
 /// One line of the plain item sales list: what sold and for how much.
 class SalesLine {
-  const SalesLine({required this.name, this.category, required this.qty, required this.amount, this.isPool = false});
+  const SalesLine({
+    required this.name,
+    this.category,
+    required this.qty,
+    required this.amount,
+    this.isPool = false,
+    this.perDay = const [],
+  });
 
   final String name;
   final String? category;
@@ -131,7 +144,15 @@ class SalesLine {
   final double amount;
   final bool isPool;
 
-  String get qtyLabel => isPool ? '${ItemRow._trim1(qty)} h' : qty.toInt().toString();
+  /// [qty] for each day of the period, oldest first (see [SalesAnalytics.dates]).
+  final List<double> perDay;
+
+  String get qtyLabel => _label(qty);
+
+  /// Quantity sold on day [i] of the period, e.g. `3` or `1.5 h`.
+  String dayLabel(int i) => _label(i < perDay.length ? perDay[i] : 0);
+
+  String _label(double v) => isPool ? '${ItemRow._trim1(v)} h' : v.toInt().toString();
 }
 
 const itemSorts = {'profit': 'Profit', 'revenue': 'Revenue', 'qty': 'Qty', 'margin': 'Margin %'};
@@ -147,6 +168,7 @@ class SalesAnalytics {
     required this.categories,
     required this.poolTables,
     this.payment,
+    this.orderType,
   }) : from = startOfDay(from),
        to = endOfDay(to),
        invoices = invoices
@@ -154,19 +176,26 @@ class SalesAnalytics {
              (i) =>
                  !i.paidAt.isBefore(startOfDay(from)) &&
                  !i.paidAt.isAfter(endOfDay(to)) &&
-                 (payment == null || i.paymentMethod == payment),
+                 (payment == null || i.paymentMethod == payment) &&
+                 (orderType == null || i.orderType == orderType),
            )
            .toList();
 
   final DateTime from;
   final DateTime to;
   final String? payment;
+
+  /// `dine_in` or `takeaway`; null = both.
+  final String? orderType;
   final List<Invoice> invoices;
   final List<MenuItem> activeMenu;
   final Map<int, MenuCategory> categories;
   final int poolTables;
 
   int get days => calendarDaysBetween(from, to) + 1;
+
+  /// Every day of the period, oldest first.
+  List<DateTime> get dates => [for (var d = 0; d < days; d++) DateTime(from.year, from.month, from.day + d)];
 
   static (DateTime, DateTime) lastDays(int n, [DateTime? end]) {
     final e = endOfDay(end ?? DateTime.now());
@@ -225,7 +254,7 @@ class SalesAnalytics {
     for (var d = 0; d < days; d++) {
       final date = DateTime(from.year, from.month, from.day + d);
       final list = byDay[date] ?? const <Invoice>[];
-      var revenue = 0.0, cost = 0.0, collected = 0.0, pool = 0.0;
+      var revenue = 0.0, cost = 0.0, collected = 0.0, pool = 0.0, dineIn = 0.0, takeaway = 0.0;
       var poolMinutes = 0;
       final types = <String, double>{};
       for (final i in list) {
@@ -236,7 +265,13 @@ class SalesAnalytics {
         pool += _poolRevenue(i);
         for (final it in i.items) {
           final t = it.categoryType ?? '';
-          types[t] = (types[t] ?? 0) + it.amount * (1 - i.discountPercent / 100);
+          final amount = it.amount * (1 - i.discountPercent / 100);
+          types[t] = (types[t] ?? 0) + amount;
+          if (i.isTakeaway) {
+            takeaway += amount;
+          } else {
+            dineIn += amount;
+          }
         }
       }
       final profit = revenue - cost;
@@ -249,6 +284,8 @@ class SalesAnalytics {
           food: roundTo(types['food'] ?? 0, 2),
           drinks: roundTo(types['drinks'] ?? 0, 2),
           snacks: roundTo(types['snacks'] ?? 0, 2),
+          dineIn: roundTo(dineIn, 2),
+          takeaway: roundTo(takeaway, 2),
           revenue: roundTo(revenue, 2),
           collected: roundTo(collected, 2),
           profit: roundTo(profit, 2),
@@ -384,12 +421,16 @@ class SalesAnalytics {
   /// then items in menu category order, most sold first. Unsold items are left out.
   List<SalesLine> sales({String? categoryType}) {
     final lines = <SalesLine>[];
+    final n = days;
+    int dayOf(Invoice i) => calendarDaysBetween(from, i.paidAt).clamp(0, n - 1);
 
     if (categoryType == null || categoryType == 'pool') {
       var minutes = 0, amount = 0.0;
+      final minutesByDay = List<int>.filled(n, 0);
       for (final i in invoices) {
         minutes += i.poolBilledMinutes;
         amount += i.poolAmount;
+        minutesByDay[dayOf(i)] += i.poolBilledMinutes;
       }
       if (minutes > 0) {
         lines.add(
@@ -399,23 +440,28 @@ class SalesAnalytics {
             qty: roundTo(minutes / 60, 1),
             amount: roundTo(amount, 2),
             isPool: true,
+            perDay: [for (final m in minutesByDay) roundTo(m / 60, 1)],
           ),
         );
       }
     }
     if (categoryType == 'pool') return lines;
 
-    final sold = <String, ({String name, String? category, int qty, double amount})>{};
+    final sold = <String, ({String name, String? category, int qty, double amount, List<int> perDay})>{};
     for (final i in invoices) {
+      final day = dayOf(i);
       for (final it in i.items) {
         if (categoryType != null && it.categoryType != categoryType) continue;
         final key = '${it.menuItemId}|${it.name}|${it.categoryName}';
         final prev = sold[key];
+        final perDay = prev?.perDay ?? List<int>.filled(n, 0);
+        perDay[day] += it.qty;
         sold[key] = (
           name: it.name,
           category: it.categoryName,
           qty: (prev?.qty ?? 0) + it.qty,
           amount: (prev?.amount ?? 0) + it.amount,
+          perDay: perDay,
         );
       }
     }
@@ -432,7 +478,15 @@ class SalesAnalytics {
         return byQty != 0 ? byQty : a.name.compareTo(b.name);
       });
     for (final s in items) {
-      lines.add(SalesLine(name: s.name, category: s.category, qty: s.qty.toDouble(), amount: roundTo(s.amount, 2)));
+      lines.add(
+        SalesLine(
+          name: s.name,
+          category: s.category,
+          qty: s.qty.toDouble(),
+          amount: roundTo(s.amount, 2),
+          perDay: [for (final q in s.perDay) q.toDouble()],
+        ),
+      );
     }
     return lines;
   }

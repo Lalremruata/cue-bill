@@ -13,12 +13,13 @@ import 'screens/reports_screen.dart';
 import 'screens/settings_screen.dart';
 import 'theme.dart';
 
-enum Section { dashboard, pos, invoices, reports, menu, settings }
+enum Section { dashboard, pos, takeaway, invoices, reports, menu, settings }
 
 extension SectionInfo on Section {
   String get label => switch (this) {
     Section.dashboard => 'Dashboard',
     Section.pos => 'Tables & Orders',
+    Section.takeaway => 'Takeaway',
     Section.invoices => 'Invoices',
     Section.reports => 'Reports',
     Section.menu => 'Menu & Tables',
@@ -28,6 +29,7 @@ extension SectionInfo on Section {
   IconData get icon => switch (this) {
     Section.dashboard => Icons.space_dashboard_outlined,
     Section.pos => Icons.table_restaurant_outlined,
+    Section.takeaway => Icons.takeout_dining_outlined,
     Section.invoices => Icons.receipt_long_outlined,
     Section.reports => Icons.bar_chart_outlined,
     Section.menu => Icons.restaurant_menu_outlined,
@@ -35,15 +37,17 @@ extension SectionInfo on Section {
   };
 }
 
-/// Which screen is showing, the selected table on Tables & Orders, and an open checkout.
+/// Which screen is showing, the selected table on Tables & Orders, the selected order on
+/// Takeaway, and an open checkout (shown on the page it was opened from).
 class Nav extends ChangeNotifier {
   Section section = Section.pos;
   int? selectedTableId;
+  int? selectedTakeawayId;
   int? checkoutTableId;
 
   void go(Section s) {
+    if (s != section) checkoutTableId = null;
     section = s;
-    if (s != Section.pos) checkoutTableId = null;
     notifyListeners();
   }
 
@@ -52,9 +56,18 @@ class Nav extends ChangeNotifier {
     notifyListeners();
   }
 
-  void openCheckout(int tableId) {
-    section = Section.pos;
-    selectedTableId = tableId;
+  void selectTakeaway(int? id) {
+    selectedTakeawayId = id;
+    notifyListeners();
+  }
+
+  void openCheckout(int tableId, {bool takeaway = false}) {
+    section = takeaway ? Section.takeaway : Section.pos;
+    if (takeaway) {
+      selectedTakeawayId = tableId;
+    } else {
+      selectedTableId = tableId;
+    }
     checkoutTableId = tableId;
     notifyListeners();
   }
@@ -81,10 +94,12 @@ class AppShell extends StatelessWidget {
 
     final Widget page = switch (nav.section) {
       Section.dashboard => const DashboardScreen(),
-      Section.pos =>
-        nav.checkoutTableId != null
-            ? CheckoutScreen(key: ValueKey('checkout-${nav.checkoutTableId}'), tableId: nav.checkoutTableId!)
-            : const PosScreen(),
+      Section.pos || Section.takeaway when nav.checkoutTableId != null => CheckoutScreen(
+        key: ValueKey('checkout-${nav.checkoutTableId}'),
+        tableId: nav.checkoutTableId!,
+      ),
+      Section.pos => const PosScreen(),
+      Section.takeaway => const TakeawayScreen(),
       Section.invoices => const InvoicesScreen(),
       Section.reports => const ReportsScreen(),
       Section.menu => const MenuScreen(),

@@ -77,6 +77,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     final nav = context.read<Nav>();
     final table = store.tableById(widget.tableId);
     final invoice = _invoice;
+    final backTo = nav.section == Section.takeaway ? 'Back to takeaway' : 'Back to tables';
 
     final back = Align(
       alignment: Alignment.centerLeft,
@@ -84,7 +85,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: const Size(0, 32)),
         onPressed: nav.closeCheckout,
         icon: const Icon(Icons.arrow_back, size: 16),
-        label: Text(invoice != null ? 'Back to tables' : 'Back to ${table?.name ?? 'tables'}'),
+        label: Text(invoice != null || table == null ? backTo : 'Back to ${table.name}'),
       ),
     );
 
@@ -92,7 +93,12 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       return PageBody(
         children: [
           PageHeader(title: 'Checkout', above: back),
-          CbCard(child: Text('This table has no open order.', style: CbText.muted(context, 14))),
+          CbCard(
+            child: Text(
+              nav.section == Section.takeaway ? 'This order is no longer open.' : 'This table has no open order.',
+              style: CbText.muted(context, 14),
+            ),
+          ),
         ],
       );
     }
@@ -335,7 +341,8 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                   children: [
                     Text('${invoice.number} saved', style: CbText.cardTitle(context)),
                     Text(
-                      '${Fmt.inr(invoice.total)} · ${invoice.paymentLabel} · ${invoice.tableName} is free again.',
+                      '${Fmt.inr(invoice.total)} · ${invoice.paymentLabel} · '
+                      '${invoice.tableName} ${invoice.isTakeaway ? 'is done' : 'is free again'}.',
                       style: CbText.muted(context, 13.5),
                     ),
                   ],
@@ -363,7 +370,10 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                 icon: const Icon(Icons.picture_as_pdf_outlined, size: 18),
                 label: const Text('Save as PDF'),
               ),
-              OutlinedButton(onPressed: context.read<Nav>().closeCheckout, child: const Text('Back to tables')),
+              OutlinedButton(
+                onPressed: context.read<Nav>().closeCheckout,
+                child: Text(context.read<Nav>().section == Section.takeaway ? 'Back to takeaway' : 'Back to tables'),
+              ),
             ],
           ),
           const SizedBox(height: 18),

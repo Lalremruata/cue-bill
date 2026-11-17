@@ -85,12 +85,14 @@ VS_VERSION_INFO VERSIONINFO
  FILETYPE VFT_APP
  FILESUBTYPE 0x0L
 BEGIN
+    // CompanyName and ProductName set the data folder (%APPDATA%\com.example\cue_bill).
+    // Changing either moves it, and CueBill would open with an empty database.
     BLOCK "StringFileInfo"
     BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "com.example" "\0"
-            VALUE "FileDescription", "cue_bill" "\0"
+            VALUE "FileDescription", "CueBill" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "cue_bill" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 com.example. All rights reserved." "\0"

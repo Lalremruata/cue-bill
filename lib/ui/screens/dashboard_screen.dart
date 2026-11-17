@@ -78,6 +78,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           bytes: ExcelExport.dashboard(
                             data.current.daily(),
                             data.current.sales(),
+                            data.current.dates,
                             salesHeading: ExcelExport.salesHeading(
                               shop: store.settings.name,
                               from: data.current.from,

@@ -48,6 +48,7 @@ void main() {
         await store.startTimer(pool);
         await store.addItem(pool, store.menu.first, 2);
         await store.addItem(store.activeTables[3], store.menu[3]);
+        await store.addItem(await store.newTakeaway(), store.menu[4]);
         // A long order: every menu item, so the order lines must scroll.
         for (final m in store.menu.skip(1)) {
           await store.addItem(pool, m);
@@ -143,6 +144,79 @@ void main() {
       await settle(tester);
       expect(store.sessionFor(third)!.bookedMinutes, 90);
       expect(tester.takeException(), isNull, reason: 'start dialog');
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.runAsync(() async {
+        await store.close();
+        await dir.delete(recursive: true);
+      });
+    });
+
+    testWidgets('takeaway page at ${size.width.toInt()} px: new order, items, checkout, back', (tester) async {
+      await tester.runAsync(() async {
+        dir = await Directory.systemTemp.createTemp('cuebill_takeaway');
+        store = await AppStore.open(dbPath: '${dir.path}/t.sqlite', factory: databaseFactoryFfi, filesDir: dir.path);
+      });
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+
+      await tester.pumpWidget(CueBillApp(store: store));
+      await settle(tester);
+      final nav = tester.element(find.byType(AppShell)).read<Nav>();
+      final table = store.activeTables[2];
+      nav.selectTable(table.id);
+      nav.go(Section.takeaway);
+      await settle(tester);
+      expect(find.text('No takeaway orders open. Tap New takeaway to start one.'), findsOneWidget);
+      expect(find.text('No order selected'), size.width >= 1080 ? findsOneWidget : findsNothing);
+
+      await tester.tap(find.text('New takeaway'));
+      await settle(tester);
+      final order = store.takeawayOrders.single;
+      expect(order.name, 'Takeaway #1');
+      expect(nav.selectedTakeawayId, order.id);
+      expect(nav.selectedTableId, table.id, reason: 'the table selection is kept apart');
+      expect(find.text('Takeaway #1'), findsWidgets);
+      expect(tester.takeException(), isNull, reason: 'takeaway order open');
+
+      // Not on Tables & Orders.
+      nav.go(Section.pos);
+      await settle(tester);
+      expect(find.text('Takeaway #1'), findsNothing);
+      nav.go(Section.takeaway);
+      await settle(tester);
+
+      await tester.runAsync(() => store.addItem(order, store.menu.first, 2));
+      await settle(tester);
+      if (size.width < 1080) {
+        await tester.tap(find.text('Order'));
+        await settle(tester);
+      }
+      await tester.tap(find.text('Checkout').hitTestable());
+      await settle(tester);
+      expect(nav.section, Section.takeaway);
+      expect(nav.checkoutTableId, order.id);
+      expect(find.text('Back to Takeaway #1'), findsOneWidget);
+      expect(tester.takeException(), isNull, reason: 'takeaway checkout');
+
+      final complete = find.textContaining('Complete sale').last;
+      await tester.ensureVisible(complete);
+      await settle(tester);
+      await tester.tap(complete);
+      await settle(tester);
+      await settle(tester);
+      expect(store.takeawayOrders, isEmpty);
+      expect(find.textContaining('Takeaway #1 is done.'), findsOneWidget);
+      final back = find.text('Back to takeaway').last;
+      await tester.ensureVisible(back);
+      await settle(tester);
+      await tester.tap(back);
+      await settle(tester);
+      expect(nav.section, Section.takeaway);
+      expect(nav.checkoutTableId, isNull);
+      expect(find.text('No takeaway orders open. Tap New takeaway to start one.'), findsOneWidget);
+      expect(tester.takeException(), isNull, reason: 'after checkout');
 
       await tester.pumpWidget(const SizedBox());
       await tester.runAsync(() async {

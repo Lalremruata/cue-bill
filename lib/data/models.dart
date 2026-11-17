@@ -10,7 +10,11 @@ bool _b(Object? v, [bool fallback = false]) => v == null ? fallback : (v == true
 String? _s(Object? v) => (v == null || (v is String && v.isEmpty)) ? null : v.toString();
 
 const categoryTypes = {'food': 'Food', 'drinks': 'Drinks', 'snacks': 'Snacks'};
-const tableTypes = {'pool': 'Pool table', 'dining': 'Dining', 'takeaway': 'Takeaway'};
+
+/// Table types you can add under Menu & Tables. Takeaway orders are not tables: each one is
+/// started from the POS screen and gets its own `takeaway` row (see [RestaurantTable.isTakeaway]).
+const tableTypes = {'pool': 'Pool table', 'dining': 'Dining'};
+const orderTypes = {'dine_in': 'Dine-in', 'takeaway': 'Takeaway'};
 const paymentMethods = {'cash': 'Cash', 'upi': 'UPI', 'card': 'Card', 'split': 'Split'};
 
 /// The single settings row: restaurant details, invoice, UPI, pool rates and GST.
@@ -364,14 +368,20 @@ class RestaurantTable {
 
   int? id;
   String name;
-  String type; // pool | dining | takeaway
+  String type; // pool | dining | takeaway (one row per takeaway order, put away once billed)
   double? hourlyRate; // overrides the default pool rate
   int sort;
   bool isActive;
 
   bool get isPool => type == 'pool';
 
-  String get typeLabel => tableTypes[type] ?? type;
+  /// A takeaway order (Takeaway #1, #2, …), not a real table.
+  bool get isTakeaway => type == 'takeaway';
+
+  /// Takeaway orders are takeaway; pool and dining tables are dine-in.
+  String get orderType => isTakeaway ? 'takeaway' : 'dine_in';
+
+  String get typeLabel => isTakeaway ? 'Takeaway' : (tableTypes[type] ?? type);
 
   Map<String, Object?> toRow() => {
     'id': id,
@@ -597,6 +607,7 @@ class Invoice {
     required this.number,
     this.tableSessionId,
     required this.tableName,
+    this.orderType = 'dine_in',
     this.customerName,
     this.customerPhone,
     required this.paymentMethod,
@@ -630,6 +641,7 @@ class Invoice {
   String number;
   int? tableSessionId;
   String tableName;
+  String orderType; // dine_in | takeaway, copied from the table type at checkout
   String? customerName;
   String? customerPhone;
   String paymentMethod; // cash | upi | card | split
@@ -662,11 +674,16 @@ class Invoice {
 
   String get paymentLabel => paymentMethods[paymentMethod] ?? paymentMethod;
 
+  bool get isTakeaway => orderType == 'takeaway';
+
+  String get orderTypeLabel => orderTypes[orderType] ?? orderType;
+
   Map<String, Object?> toRow() => {
     'id': id,
     'number': number,
     'table_session_id': tableSessionId,
     'table_name': tableName,
+    'order_type': orderType,
     'customer_name': customerName,
     'customer_phone': customerPhone,
     'payment_method': paymentMethod,
@@ -701,6 +718,7 @@ class Invoice {
     number: r['number'] as String,
     tableSessionId: r['table_session_id'] == null ? null : _i(r['table_session_id']),
     tableName: r['table_name'] as String,
+    orderType: _s(r['order_type']) ?? 'dine_in',
     customerName: _s(r['customer_name']),
     customerPhone: _s(r['customer_phone']),
     paymentMethod: r['payment_method'] as String,

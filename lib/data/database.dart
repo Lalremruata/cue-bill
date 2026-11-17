@@ -8,7 +8,7 @@ import 'models.dart';
 class AppDatabase {
   AppDatabase._();
 
-  static const version = 2;
+  static const version = 4;
 
   static Future<Database> open(String path, DatabaseFactory factory) {
     return factory.openDatabase(
@@ -71,6 +71,7 @@ class AppDatabase {
         number TEXT NOT NULL UNIQUE,
         table_session_id INTEGER REFERENCES table_sessions(id) ON DELETE SET NULL,
         table_name TEXT NOT NULL,
+        order_type TEXT NOT NULL DEFAULT 'dine_in',
         customer_name TEXT,
         customer_phone TEXT,
         payment_method TEXT NOT NULL,
@@ -137,6 +138,24 @@ class AppDatabase {
       await db.execute('ALTER TABLE invoices ADD COLUMN pool_booked_minutes INTEGER');
       await db.execute(_sessionEvents);
       await db.execute(_sessionEventsIndex);
+    }
+    if (from < 3) {
+      // v3: dine-in or takeaway on each invoice, worked out from the table it was billed on.
+      await db.execute("ALTER TABLE invoices ADD COLUMN order_type TEXT NOT NULL DEFAULT 'dine_in'");
+      await db.execute('''UPDATE invoices SET order_type = 'takeaway'
+        WHERE table_session_id IN (
+            SELECT ts.id FROM table_sessions ts
+            JOIN restaurant_tables rt ON rt.id = ts.restaurant_table_id
+            WHERE rt.type = 'takeaway')
+          OR (table_session_id IS NULL
+            AND table_name IN (SELECT name FROM restaurant_tables WHERE type = 'takeaway'))''');
+    }
+    if (from < 4) {
+      // v4: takeaway is no longer a table; each takeaway order gets its own row from the POS
+      // screen. Put away the old Takeaway table unless it has an order open right now.
+      await db.execute('''UPDATE restaurant_tables SET is_active = 0
+        WHERE type = 'takeaway'
+          AND id NOT IN (SELECT restaurant_table_id FROM table_sessions WHERE status = 'open')''');
     }
   }
 
@@ -211,7 +230,6 @@ class AppDatabase {
       ('Table 3', 'dining'),
       ('Table 4', 'dining'),
       ('Table 5', 'dining'),
-      ('Takeaway', 'takeaway'),
     ];
     for (var sort = 0; sort < tables.length; sort++) {
       final (name, type) = tables[sort];
