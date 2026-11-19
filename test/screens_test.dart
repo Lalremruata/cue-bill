@@ -4,6 +4,7 @@ import 'package:cue_bill/data/models.dart';
 import 'package:cue_bill/data/store.dart';
 import 'package:cue_bill/main.dart';
 import 'package:cue_bill/ui/shell.dart';
+import 'package:cue_bill/ui/widgets.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -59,6 +60,11 @@ void main() {
         store.sessionFor(booked)!.timerStartedAt = DateTime.now().subtract(const Duration(minutes: 70));
         // A third, free pool table for the start dialog.
         await store.saveTable(RestaurantTable(name: 'Pool Table 3', type: 'pool', sort: 2));
+        // Regulars for the Customers page.
+        await store.saveCustomer(Customer(name: 'Lalpeka', phone: '+91 98765 43210', discountPercent: 10));
+        await store.saveCustomer(
+          Customer(name: 'Mama Zote with a rather long name for the table', notes: 'Likes table 2'),
+        );
       });
 
       tester.view.physicalSize = size;
@@ -90,6 +96,17 @@ void main() {
         nav.closeCheckout();
         await settle(tester);
       }
+
+      // A regular's dialog, with their recent bills.
+      nav.go(Section.customers);
+      await settle(tester);
+      expect(find.text('10% off'), findsOneWidget);
+      await tester.tap(find.text('Lalpeka'));
+      await settle(tester);
+      expect(find.text('Recent bills'), findsOneWidget);
+      expect(tester.takeException(), isNull, reason: 'customer dialog');
+      await tester.tap(find.text('Cancel'));
+      await settle(tester);
 
       // Over-time table: flagged in the strip; the adjust dialog shows its history.
       nav.go(Section.pos);
@@ -144,6 +161,53 @@ void main() {
       await settle(tester);
       expect(store.sessionFor(third)!.bookedMinutes, 90);
       expect(tester.takeException(), isNull, reason: 'start dialog');
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.runAsync(() async {
+        await store.close();
+        await dir.delete(recursive: true);
+      });
+    });
+
+    testWidgets('checkout at ${size.width.toInt()} px: picking a regular fills in their discount', (tester) async {
+      late Customer regular;
+      await tester.runAsync(() async {
+        dir = await Directory.systemTemp.createTemp('cuebill_regular');
+        store = await AppStore.open(dbPath: '${dir.path}/r.sqlite', factory: databaseFactoryFfi, filesDir: dir.path);
+        regular = await store.saveCustomer(Customer(name: 'Lalpeka', phone: '98765 43210', discountPercent: 10));
+        await store.addItem(store.activeTables[2], store.menu.first, 2);
+      });
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+
+      await tester.pumpWidget(CueBillApp(store: store));
+      await settle(tester);
+      final nav = tester.element(find.byType(AppShell)).read<Nav>();
+      nav.openCheckout(store.activeTables[2].id!);
+      await settle(tester);
+
+      final phoneField = find.widgetWithText(FieldLabel, 'Phone (optional)');
+      await tester.ensureVisible(phoneField);
+      await tester.enterText(find.descendant(of: phoneField, matching: find.byType(TextField)), '98765');
+      await settle(tester);
+      expect(find.textContaining('Lalpeka  9876543210'), findsOneWidget);
+      await tester.tap(find.textContaining('Lalpeka  9876543210'));
+      await settle(tester);
+      expect(find.textContaining('Regular customer · 10% off'), findsOneWidget);
+      expect(tester.takeException(), isNull, reason: 'regular picked');
+
+      final complete = find.textContaining('Complete sale').last;
+      await tester.ensureVisible(complete);
+      await settle(tester);
+      await tester.tap(complete);
+      await settle(tester);
+      await settle(tester);
+      final invoice = (await tester.runAsync(() => store.customerInvoices(regular)))!.single;
+      expect(invoice.customerId, regular.id);
+      expect(invoice.customerName, 'Lalpeka');
+      expect(invoice.customerPhone, '9876543210');
+      expect(invoice.discountPercent, 10);
 
       await tester.pumpWidget(const SizedBox());
       await tester.runAsync(() async {

@@ -8,7 +8,7 @@ import 'models.dart';
 class AppDatabase {
   AppDatabase._();
 
-  static const version = 4;
+  static const version = 5;
 
   static Future<Database> open(String path, DatabaseFactory factory) {
     return factory.openDatabase(
@@ -29,6 +29,8 @@ class AppDatabase {
     const statements = [
       // Single row: the whole BusinessSettings object as JSON.
       'CREATE TABLE settings (id INTEGER PRIMARY KEY, data TEXT NOT NULL)',
+      _customers,
+      _customersPhone,
       '''CREATE TABLE categories (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
@@ -74,6 +76,7 @@ class AppDatabase {
         order_type TEXT NOT NULL DEFAULT 'dine_in',
         customer_name TEXT,
         customer_phone TEXT,
+        customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL,
         payment_method TEXT NOT NULL,
         cash_received REAL,
         pool_started_at INTEGER,
@@ -100,6 +103,7 @@ class AppDatabase {
         paid_at INTEGER NOT NULL,
         created_at INTEGER)''',
       'CREATE INDEX invoices_paid_at ON invoices (paid_at)',
+      _invoicesCustomer,
       '''CREATE TABLE invoice_items (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
@@ -130,6 +134,18 @@ class AppDatabase {
         at INTEGER NOT NULL)''';
   static const _sessionEventsIndex = 'CREATE INDEX session_events_session ON session_events (table_session_id)';
 
+  /// Regular customers, with a default discount filled in at checkout.
+  static const _customers = '''CREATE TABLE customers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        phone TEXT,
+        discount_percent REAL NOT NULL DEFAULT 0,
+        notes TEXT,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER)''';
+  static const _customersPhone = 'CREATE UNIQUE INDEX customers_phone ON customers (phone) WHERE phone IS NOT NULL';
+  static const _invoicesCustomer = 'CREATE INDEX invoices_customer ON invoices (customer_id)';
+
   /// Brings an older database (or an older backup being restored) up to [version].
   static Future<void> upgrade(Database db, int from, int to) async {
     if (from < 2) {
@@ -156,6 +172,15 @@ class AppDatabase {
       await db.execute('''UPDATE restaurant_tables SET is_active = 0
         WHERE type = 'takeaway'
           AND id NOT IN (SELECT restaurant_table_id FROM table_sessions WHERE status = 'open')''');
+    }
+    if (from < 5) {
+      // v5: regular customers, linked to the invoices they paid.
+      await db.execute(_customers);
+      await db.execute(_customersPhone);
+      await db.execute(
+        'ALTER TABLE invoices ADD COLUMN customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL',
+      );
+      await db.execute(_invoicesCustomer);
     }
   }
 

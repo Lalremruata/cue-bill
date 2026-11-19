@@ -35,6 +35,9 @@ class AppStore extends ChangeNotifier {
   List<MenuCategory> categories = [];
   List<MenuItem> menu = [];
   List<RestaurantTable> tables = [];
+
+  /// Active regular customers, by name.
+  List<Customer> customers = [];
   final Map<int, TableSession> _sessions = {}; // open sessions by table id
   int invoiceCount = 0;
 
@@ -67,6 +70,11 @@ class AppStore extends ChangeNotifier {
         : BusinessSettings.fromJson((jsonDecode(s.first['data'] as String) as Map).cast<String, Object?>());
     categories = (await _db.query('categories', orderBy: 'sort, name')).map(MenuCategory.fromRow).toList();
     menu = (await _db.query('menu_items', orderBy: 'name')).map(MenuItem.fromRow).toList();
+    customers = (await _db.query(
+      'customers',
+      where: 'is_active = 1',
+      orderBy: 'name COLLATE NOCASE',
+    )).map(Customer.fromRow).toList();
     // Billed takeaway orders stay in the database but are not loaded.
     tables = (await _db.query(
       'restaurant_tables',
@@ -437,6 +445,7 @@ class AppStore extends ChangeNotifier {
         orderType: table.orderType,
         customerName: clean(options.customerName),
         customerPhone: clean(options.customerPhone),
+        customerId: options.customerId,
         paymentMethod: options.paymentMethod,
         cashReceived: options.paymentMethod == 'cash' ? options.cashReceived : null,
         poolStartedAt: calc.isPool ? calc.poolStartedAt : null,
@@ -551,6 +560,114 @@ class AppStore extends ChangeNotifier {
       categories: categoryById,
       poolTables: poolTableCount,
     );
+  }
+
+  // ------------------------------------------------------------ customers
+
+  Customer? customerById(int? id) => id == null ? null : customers.where((c) => c.id == id).firstOrNull;
+
+  /// Regulars whose phone contains the typed digits or whose name contains the typed text.
+  List<Customer> searchCustomers(String query, {int limit = 6}) {
+    final q = query.trim().toLowerCase();
+    if (q.isEmpty) return [];
+    final digits = q.replaceAll(RegExp(r'\D'), '');
+    final phoneOnly = digits.isNotEmpty && RegExp(r'^[\d\s+()-]+$').hasMatch(q);
+    return customers
+        .where(
+          (c) => phoneOnly
+              ? (c.phone ?? '').contains(Customer.normalisePhone(q) ?? digits)
+              : c.name.toLowerCase().contains(q),
+        )
+        .take(limit)
+        .toList();
+  }
+
+  /// The regular with exactly this phone, if any.
+  Customer? customerByPhone(String? phone) {
+    final p = Customer.normalisePhone(phone);
+    return p == null ? null : customers.where((c) => c.phone == p).firstOrNull;
+  }
+
+  Future<Customer> saveCustomer(Customer c) async {
+    c.name = c.name.trim();
+    if (c.name.isEmpty) throw CueBillException('Enter a name.');
+    c.phone = Customer.normalisePhone(c.phone);
+    if (c.phone != null && customers.any((o) => o.phone == c.phone && o.id != c.id)) {
+      throw CueBillException('A customer with this phone already exists.');
+    }
+    c.discountPercent = c.discountPercent.clamp(0, 100).toDouble();
+    final row = c.toRow()..remove('id');
+    if (c.id == null) {
+      c.id = await _db.insert('customers', row);
+      customers.add(c);
+    } else {
+      await _db.update('customers', row, where: 'id = ?', whereArgs: [c.id]);
+    }
+    customers.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    revision++;
+    notifyListeners();
+    return c;
+  }
+
+  /// Hides the customer. Their invoices keep the link; the phone is freed for a new record.
+  Future<void> deleteCustomer(Customer c) async {
+    await _db.update('customers', {'is_active': 0, 'phone': null}, where: 'id = ?', whereArgs: [c.id]);
+    customers.removeWhere((o) => o.id == c.id);
+    revision++;
+    notifyListeners();
+  }
+
+  /// Which regular an invoice belongs to: the one picked at checkout, or else the one whose
+  /// phone matches (sales from before the customer was saved).
+  int? _customerFor(Object? customerId, Object? phone, Map<String, int> byPhone) {
+    if (customerId != null) return (customerId as num).toInt();
+    final p = Customer.normalisePhone(phone as String?);
+    return p == null ? null : byPhone[p];
+  }
+
+  /// Visits, spend and last visit for every regular, from one pass over the invoices.
+  Future<Map<int, CustomerStats>> customerStatsAll() async {
+    final byPhone = {
+      for (final c in customers)
+        if (c.phone != null) c.phone!: c.id!,
+    };
+    final rows = await _db.rawQuery(
+      'SELECT customer_id, customer_phone, total, paid_at FROM invoices '
+      'WHERE customer_id IS NOT NULL OR customer_phone IS NOT NULL',
+    );
+    final out = <int, CustomerStats>{};
+    for (final r in rows) {
+      final id = _customerFor(r['customer_id'], r['customer_phone'], byPhone);
+      if (id == null) continue;
+      final paid = DateTime.fromMillisecondsSinceEpoch((r['paid_at'] as num).toInt());
+      final prev = out[id] ?? (visits: 0, spend: 0.0, lastVisit: null);
+      out[id] = (
+        visits: prev.visits + 1,
+        spend: roundTo(prev.spend + (r['total'] as num).toDouble(), 2),
+        lastVisit: prev.lastVisit == null || paid.isAfter(prev.lastVisit!) ? paid : prev.lastVisit,
+      );
+    }
+    return out;
+  }
+
+  Future<CustomerStats> customerStats(Customer c) async =>
+      (await customerStatsAll())[c.id] ?? (visits: 0, spend: 0.0, lastVisit: null);
+
+  /// A customer's invoices, newest first.
+  Future<List<Invoice>> customerInvoices(Customer c, {int limit = 50}) async {
+    final rows = await _db.query(
+      'invoices',
+      where: c.phone == null
+          ? 'customer_id = ?'
+          : 'customer_id = ? OR (customer_id IS NULL AND customer_phone IS NOT NULL)',
+      whereArgs: [c.id],
+      orderBy: 'paid_at DESC, id DESC',
+    );
+    final mine = rows
+        .where((r) => r['customer_id'] != null || Customer.normalisePhone(r['customer_phone'] as String?) == c.phone)
+        .take(limit)
+        .toList();
+    return _withItems(mine);
   }
 
   // ----------------------------------------------------------------- menu
