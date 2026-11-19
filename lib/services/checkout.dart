@@ -50,6 +50,7 @@ class CheckoutOptions {
     this.discountPercent = 0,
     this.customerName,
     this.customerPhone,
+    this.customerId,
     this.cashReceived,
   });
 
@@ -57,6 +58,9 @@ class CheckoutOptions {
   final double discountPercent;
   final String? customerName;
   final String? customerPhone;
+
+  /// The saved regular picked at checkout, if any.
+  final int? customerId;
   final double? cashReceived;
 }
 

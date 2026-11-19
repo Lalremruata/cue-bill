@@ -402,6 +402,59 @@ class RestaurantTable {
   );
 }
 
+/// A regular customer. Picking one at checkout fills in their name, phone and discount.
+class Customer {
+  Customer({
+    this.id,
+    required this.name,
+    this.phone,
+    this.discountPercent = 0,
+    this.notes,
+    this.isActive = true,
+    DateTime? createdAt,
+  }) : createdAt = createdAt ?? DateTime.now();
+
+  int? id;
+  String name;
+
+  /// Digits only, last 10 (see [normalisePhone]); null if not given.
+  String? phone;
+  double discountPercent;
+  String? notes;
+  bool isActive;
+  DateTime createdAt;
+
+  /// `+91 98765-43210` → `9876543210`; null if there are no digits.
+  static String? normalisePhone(String? v) {
+    final digits = (v ?? '').replaceAll(RegExp(r'\D'), '');
+    if (digits.isEmpty) return null;
+    return digits.length > 10 ? digits.substring(digits.length - 10) : digits;
+  }
+
+  Map<String, Object?> toRow() => {
+    'id': id,
+    'name': name,
+    'phone': phone,
+    'discount_percent': discountPercent,
+    'notes': notes,
+    'is_active': isActive ? 1 : 0,
+    'created_at': _ms(createdAt),
+  };
+
+  factory Customer.fromRow(Map<String, Object?> r) => Customer(
+    id: _i(r['id']),
+    name: r['name'] as String,
+    phone: _s(r['phone']),
+    discountPercent: _d(r['discount_percent']),
+    notes: _s(r['notes']),
+    isActive: _b(r['is_active'], true),
+    createdAt: _dt(r['created_at']),
+  );
+}
+
+/// Visits, spend (incl. GST) and last visit for a customer.
+typedef CustomerStats = ({int visits, double spend, DateTime? lastVisit});
+
 enum TimerState { idle, running, paused, stopped }
 
 class SessionItem {
@@ -610,6 +663,7 @@ class Invoice {
     this.orderType = 'dine_in',
     this.customerName,
     this.customerPhone,
+    this.customerId,
     required this.paymentMethod,
     this.cashReceived,
     this.poolStartedAt,
@@ -644,6 +698,7 @@ class Invoice {
   String orderType; // dine_in | takeaway, copied from the table type at checkout
   String? customerName;
   String? customerPhone;
+  int? customerId; // the saved regular, if one was picked at checkout
   String paymentMethod; // cash | upi | card | split
   double? cashReceived;
   DateTime? poolStartedAt;
@@ -686,6 +741,7 @@ class Invoice {
     'order_type': orderType,
     'customer_name': customerName,
     'customer_phone': customerPhone,
+    'customer_id': customerId,
     'payment_method': paymentMethod,
     'cash_received': cashReceived,
     'pool_started_at': _ms(poolStartedAt),
@@ -721,6 +777,7 @@ class Invoice {
     orderType: _s(r['order_type']) ?? 'dine_in',
     customerName: _s(r['customer_name']),
     customerPhone: _s(r['customer_phone']),
+    customerId: r['customer_id'] == null ? null : _i(r['customer_id']),
     paymentMethod: r['payment_method'] as String,
     cashReceived: r['cash_received'] == null ? null : _d(r['cash_received']),
     poolStartedAt: _dt(r['pool_started_at']),

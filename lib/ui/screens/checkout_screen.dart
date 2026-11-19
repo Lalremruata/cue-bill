@@ -11,6 +11,7 @@ import '../files.dart';
 import '../receipt_view.dart';
 import '../shell.dart';
 import '../theme.dart';
+import 'customers_screen.dart';
 import '../widgets.dart';
 
 class CheckoutScreen extends StatefulWidget {
@@ -23,6 +24,8 @@ class CheckoutScreen extends StatefulWidget {
 }
 
 class _CheckoutScreenState extends State<CheckoutScreen> {
+  static const _presets = [0.0, 5.0, 10.0, 15.0];
+
   String _payment = 'upi';
   double _discount = 0;
   final _customDiscount = TextEditingController();
@@ -32,6 +35,11 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   ReceiptFormat _format = ReceiptFormat.roll80;
   Invoice? _invoice;
   bool _saving = false;
+
+  /// The regular picked for this bill, and what was last typed to look one up.
+  int? _customerId;
+  int? _customerVisits;
+  String _lookup = '';
 
   @override
   void dispose() {
@@ -49,8 +57,59 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     discountPercent: _discount,
     customerName: _name.text,
     customerPhone: _phone.text,
+    customerId: _customerId,
     cashReceived: _payment == 'cash' ? _cashReceived : null,
   );
+
+  void _setDiscount(double d) {
+    _discount = d;
+    if (_presets.contains(d)) {
+      _customDiscount.clear();
+    } else {
+      _customDiscount.text = Fmt.trim(d);
+    }
+  }
+
+  /// Fill in a regular's name, phone and discount.
+  Future<void> _pick(Customer c) async {
+    setState(() {
+      _customerId = c.id;
+      _customerVisits = null;
+      _lookup = '';
+      _name.text = c.name;
+      _phone.text = c.phone ?? '';
+      if (c.discountPercent > 0) _setDiscount(c.discountPercent);
+    });
+    final stats = await context.read<AppStore>().customerStats(c);
+    if (mounted && _customerId == c.id) setState(() => _customerVisits = stats.visits);
+  }
+
+  /// Stop linking this bill to the regular; their discount comes off unless it was changed by hand.
+  void _unlink() {
+    final c = context.read<AppStore>().customerById(_customerId);
+    setState(() {
+      if (c != null && c.discountPercent > 0 && _discount == c.discountPercent) _setDiscount(0);
+      _customerId = null;
+      _customerVisits = null;
+    });
+  }
+
+  void _customerTyped(String value) {
+    final c = context.read<AppStore>().customerById(_customerId);
+    setState(() {
+      // Editing the details away from the regular's means it is someone else.
+      if (c != null && (_name.text.trim() != c.name || Customer.normalisePhone(_phone.text) != c.phone)) {
+        _customerId = null;
+        _customerVisits = null;
+      }
+      _lookup = value;
+    });
+  }
+
+  Future<void> _saveAsRegular() async {
+    final saved = await showCustomerDialog(context, name: _name.text.trim(), phone: _phone.text.trim());
+    if (saved != null && mounted) await _pick(saved);
+  }
 
   Future<void> _complete(RestaurantTable table, double total) async {
     final cash = _cashReceived;
@@ -163,7 +222,6 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
   Widget _form(BuildContext context, double total) {
     final cb = context.cb;
-    final presets = [0.0, 5.0, 10.0, 15.0];
     final cash = _cashReceived;
 
     return CbCard(
@@ -190,7 +248,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
             runSpacing: 8,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              for (final p in presets)
+              for (final p in _presets)
                 CbChip(
                   label: p == 0 ? 'None' : '${p.toInt()}%',
                   selected: _discount == p && _customDiscount.text.isEmpty,
@@ -217,18 +275,15 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
             children: [
               FieldLabel(
                 'Customer name (optional)',
-                child: TextField(controller: _name, onChanged: (_) => setState(() {})),
+                child: TextField(controller: _name, onChanged: _customerTyped),
               ),
               FieldLabel(
                 'Phone (optional)',
-                child: TextField(
-                  controller: _phone,
-                  keyboardType: TextInputType.phone,
-                  onChanged: (_) => setState(() {}),
-                ),
+                child: TextField(controller: _phone, keyboardType: TextInputType.phone, onChanged: _customerTyped),
               ),
             ],
           ),
+          ..._customerHelp(context),
           if (_payment == 'cash') ...[
             const SizedBox(height: 16),
             FieldLabel(
@@ -318,6 +373,109 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         ],
       ),
     );
+  }
+
+  /// Under the name and phone: the linked regular, matching regulars, or "Save as regular".
+  List<Widget> _customerHelp(BuildContext context) {
+    final cb = context.cb;
+    final store = context.read<AppStore>();
+    final linked = store.customerById(_customerId);
+    if (linked != null) {
+      final details = [
+        if (linked.discountPercent > 0) '${Fmt.trim(linked.discountPercent)}% off',
+        if (_customerVisits != null)
+          '${Fmt.count(_customerVisits!)} ${_customerVisits == 1 ? 'visit' : 'visits'} before',
+      ].join(' · ');
+      return [
+        const SizedBox(height: 10),
+        Container(
+          padding: const EdgeInsets.fromLTRB(12, 4, 4, 4),
+          decoration: BoxDecoration(color: cb.greenSoft, borderRadius: BorderRadius.circular(10)),
+          child: Row(
+            children: [
+              Icon(Icons.star_rounded, size: 18, color: cb.greenText),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  details.isEmpty ? 'Regular customer' : 'Regular customer · $details',
+                  style: TextStyle(color: cb.greenText, fontWeight: FontWeight.w600, fontSize: 13.5),
+                ),
+              ),
+              IconButton(
+                tooltip: 'Not this customer',
+                visualDensity: VisualDensity.compact,
+                onPressed: _unlink,
+                icon: Icon(Icons.close, size: 18, color: cb.greenText),
+              ),
+            ],
+          ),
+        ),
+      ];
+    }
+
+    final matches = store.searchCustomers(_lookup);
+    if (matches.isNotEmpty) {
+      return [
+        const SizedBox(height: 8),
+        Container(
+          decoration: BoxDecoration(
+            border: Border.all(color: cb.line),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Column(
+            children: [
+              for (final c in matches)
+                InkWell(
+                  onTap: () => _pick(c),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    child: Row(
+                      children: [
+                        Icon(Icons.person_outline, size: 18, color: cb.muted),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text.rich(
+                            TextSpan(
+                              children: [
+                                TextSpan(
+                                  text: c.name,
+                                  style: TextStyle(fontWeight: FontWeight.w600, color: cb.ink),
+                                ),
+                                if (c.phone != null)
+                                  TextSpan(
+                                    text: '  ${c.phone}',
+                                    style: TextStyle(color: cb.muted),
+                                  ),
+                              ],
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        if (c.discountPercent > 0) CbBadge('${Fmt.trim(c.discountPercent)}% off', tone: Tone.green),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ];
+    }
+
+    final typed = _name.text.trim().isNotEmpty || Customer.normalisePhone(_phone.text) != null;
+    if (!typed || store.customerByPhone(_phone.text) != null) return [];
+    return [
+      const SizedBox(height: 4),
+      Align(
+        alignment: Alignment.centerLeft,
+        child: TextButton.icon(
+          style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: const Size(0, 32)),
+          onPressed: _saveAsRegular,
+          icon: const Icon(Icons.person_add_alt_outlined, size: 18),
+          label: const Text('Save as regular'),
+        ),
+      ),
+    ];
   }
 
   Widget _done(BuildContext context, Invoice invoice, ReceiptData receipt) {

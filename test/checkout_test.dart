@@ -250,7 +250,8 @@ void main() {
     Future<Set<Object?>> cols(String t) async =>
         (await db.rawQuery('PRAGMA table_info($t)')).map((r) => r['name']).toSet();
     expect(await cols('table_sessions'), contains('booked_minutes'));
-    expect(await cols('invoices'), containsAll(['pool_booked_minutes', 'order_type']));
+    expect(await cols('invoices'), containsAll(['pool_booked_minutes', 'order_type', 'customer_id']));
+    expect(await cols('customers'), containsAll(['name', 'phone', 'discount_percent', 'is_active']));
     expect(await cols('session_events'), containsAll(['type', 'minutes', 'note', 'at']));
     await db.close();
   });
@@ -338,6 +339,7 @@ void main() {
           await db.execute(
             'CREATE TABLE table_sessions (id INTEGER PRIMARY KEY, restaurant_table_id INTEGER, status TEXT)',
           );
+          await db.execute('CREATE TABLE invoices (id INTEGER PRIMARY KEY, number TEXT)');
           await db.insert('restaurant_tables', {'id': 1, 'name': 'Table 1', 'type': 'dining', 'is_active': 1});
           await db.insert('restaurant_tables', {'id': 2, 'name': 'Takeaway', 'type': 'takeaway', 'is_active': 1});
           await db.insert('restaurant_tables', {'id': 3, 'name': 'Parcel', 'type': 'takeaway', 'is_active': 1});
@@ -381,6 +383,51 @@ void main() {
     expect(today.takeaway, 450);
     expect(today.dineIn, 340);
     expect(today.dineIn + today.takeaway, today.food + today.drinks + today.snacks);
+  });
+
+  test('regular customers: saved, searched, linked to sales, with older sales matched by phone', () async {
+    final pek = await store.saveCustomer(Customer(name: ' Lalpeka ', phone: '+91 98765-43210', discountPercent: 10));
+    await store.saveCustomer(Customer(name: 'Mami', phone: '9000000001'));
+    expect(pek.name, 'Lalpeka');
+    expect(pek.phone, '9876543210');
+    expect(store.searchCustomers('98765').map((c) => c.name), ['Lalpeka']);
+    expect(store.searchCustomers('+91 98765 43210').map((c) => c.name), ['Lalpeka']);
+    expect(store.searchCustomers('mam').map((c) => c.name), ['Mami']);
+    expect(store.searchCustomers(''), isEmpty);
+    expect(store.customerByPhone('098765 43210')?.id, pek.id);
+
+    // The phone must be unique.
+    expect(() => store.saveCustomer(Customer(name: 'Someone', phone: '9876543210')), throwsA(isA<CueBillException>()));
+
+    // A sale before Lalpeka was picked (typed phone only), then one linked at checkout.
+    await store.addItem(store.activeTables[2], store.menu.first);
+    final before = await store.completeSale(
+      store.activeTables[2],
+      const CheckoutOptions(paymentMethod: 'cash', customerName: 'Pek', customerPhone: '98765 43210'),
+    );
+    await store.addItem(store.activeTables[3], store.menu.first, 2);
+    final linked = await store.completeSale(
+      store.activeTables[3],
+      CheckoutOptions(paymentMethod: 'upi', discountPercent: 10, customerName: 'Lalpeka', customerId: pek.id),
+    );
+    expect(before.customerId, isNull);
+    expect(linked.customerId, pek.id);
+
+    final stats = await store.customerStats(pek);
+    expect(stats.visits, 2);
+    expect(stats.spend, before.total + linked.total);
+    expect(stats.lastVisit?.millisecondsSinceEpoch, linked.paidAt.millisecondsSinceEpoch);
+    expect((await store.customerInvoices(pek)).map((i) => i.number), [linked.number, before.number]);
+    expect((await store.customerStatsAll()).keys, [pek.id]);
+
+    // Reloaded from the database, and deleting frees the phone but keeps the invoices.
+    await store.reload();
+    expect(store.customerById(pek.id)?.discountPercent, 10);
+    await store.deleteCustomer(store.customerById(pek.id)!);
+    expect(store.customers.map((c) => c.name), ['Mami']);
+    await store.saveCustomer(Customer(name: 'New Pek', phone: '9876543210'));
+    final inv = await store.recentInvoices(search: 'Lalpeka');
+    expect(inv.single.customerId, pek.id);
   });
 
   test('pool rate uses happy hour, then the table rate, then the default', () {
