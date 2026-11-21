@@ -31,7 +31,8 @@ void main() {
 
   test('seeds menu, tables and settings on first run', () {
     expect(store.menu.length, 16);
-    expect(store.activeTables.first.name, 'Pool Table 1');
+    expect(store.activeTables.first.name, 'Pool Table');
+    expect(store.activeTables.where((t) => t.isPool).length, 1);
     expect(store.activeTables.last.name, 'Table 5');
     expect(store.activeTables.where((t) => t.isTakeaway), isEmpty);
     expect(store.takeawayOrders, isEmpty);
@@ -182,6 +183,7 @@ void main() {
 
   test('dashboard pool hours count tables still playing, and only once after checkout', () async {
     final (from, to) = SalesAnalytics.lastDays(1);
+    await store.saveTable(RestaurantTable(name: 'Pool Table 2', type: 'pool', sort: 1));
     final pool = store.activeTables.where((t) => t.isPool).toList();
     expect(store.livePoolSeconds(), 0);
     expect(store.poolTablesPlaying, 0);
@@ -288,12 +290,10 @@ void main() {
     await old.close();
     final db = await AppDatabase.open(path, databaseFactoryFfi);
     final rows = await db.query('invoices', columns: ['number', 'order_type'], orderBy: 'number');
-    expect({for (final r in rows) r['number']: r['order_type']}, {
-      'A': 'dine_in',
-      'B': 'takeaway',
-      'C': 'takeaway',
-      'D': 'dine_in',
-    });
+    expect(
+      {for (final r in rows) r['number']: r['order_type']},
+      {'A': 'dine_in', 'B': 'takeaway', 'C': 'takeaway', 'D': 'dine_in'},
+    );
     await db.close();
   });
 
