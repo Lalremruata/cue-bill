@@ -6,11 +6,15 @@ import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 
 import '../core/billing.dart';
+import '../core/format.dart';
 import '../services/analytics.dart';
 import '../services/checkout.dart';
 import 'database.dart';
 import 'demo_sales.dart';
 import 'models.dart';
+
+/// Something a booking would clash with: another booking, or the game in play.
+typedef BookingConflict = ({String name, DateTime from, DateTime to, bool playing});
 
 class CueBillException implements Exception {
   CueBillException(this.message);
@@ -39,6 +43,9 @@ class AppStore extends ChangeNotifier {
   /// Active regular customers, by name.
   List<Customer> customers = [];
   final Map<int, TableSession> _sessions = {}; // open sessions by table id
+
+  /// Pool bookings that still hold a table (booked or playing), from today on, in time order.
+  List<Booking> bookings = [];
   int invoiceCount = 0;
 
   /// The order line changed last, so the order panel can highlight it. Not saved.
@@ -101,6 +108,13 @@ class AppStore extends ChangeNotifier {
       _sessions[session.tableId] = session; // latest open session wins
     }
     invoiceCount = Sqflite.firstIntValue(await _db.rawQuery('SELECT COUNT(*) FROM invoices')) ?? 0;
+    // Earlier days' bookings that were never started stay on the Bookings page only.
+    bookings = (await _db.query(
+      'bookings',
+      where: "status = 'playing' OR (status = 'booked' AND start_at + minutes * 60000 >= ?)",
+      whereArgs: [startOfDay(DateTime.now()).millisecondsSinceEpoch],
+      orderBy: 'start_at, id',
+    )).map(Booking.fromRow).toList();
   }
 
   Future<void> reload() async {
@@ -218,7 +232,7 @@ class AppStore extends ChangeNotifier {
   }
 
   /// Starts the pool timer. [bookedMinutes] null or 0 = open play.
-  Future<void> startTimer(RestaurantTable table, {int? bookedMinutes}) async {
+  Future<void> startTimer(RestaurantTable table, {int? bookedMinutes, String? note}) async {
     final s = await ensureSession(table);
     if (s.timerStartedAt != null) return;
     final now = DateTime.now();
@@ -230,7 +244,7 @@ class AppStore extends ChangeNotifier {
       ..pausedSeconds = 0
       ..bookedMinutes = booked
       ..hourlyRate = settings.poolRateFor(table, now);
-    await _log(s, 'start', minutes: booked);
+    await _log(s, 'start', minutes: booked, note: note);
     await _saveSession(s);
   }
 
@@ -398,10 +412,223 @@ class AppStore extends ChangeNotifier {
         whereArgs: [s.id],
       );
       await _putAwayTakeaway(txn, table);
+      if (s.bookingId != null) {
+        await txn.update(
+          'bookings',
+          {'status': 'cancelled', 'cancel_reason': 'Table cleared'},
+          where: "id = ? AND status = 'playing'",
+          whereArgs: [s.bookingId],
+        );
+      }
     });
     _sessions.remove(table.id);
     if (table.isTakeaway) tables.removeWhere((t) => t.id == table.id);
+    bookings.removeWhere((b) => b.id == s.bookingId && b.isPlaying);
+    bookingRevision++;
     notifyListeners();
+  }
+
+  // ------------------------------------------------------------- bookings
+
+  /// Bumped whenever a booking changes, so the Bookings page reloads.
+  int bookingRevision = 0;
+
+  Booking? bookingById(int? id) => id == null ? null : bookings.where((b) => b.id == id).firstOrNull;
+
+  /// The booking the game on [table] was started from.
+  Booking? playingBooking(RestaurantTable table) => bookingById(_sessions[table.id]?.bookingId);
+
+  /// Bookings on [table] not yet started, soonest first. Late ones stay until started,
+  /// marked no-show or cancelled.
+  List<Booking> upcomingFor(RestaurantTable table) =>
+      bookings.where((b) => b.tableId == table.id && b.isUpcoming).toList();
+
+  /// Upcoming bookings on [table] for the day of [now].
+  List<Booking> todayFor(RestaurantTable table, [DateTime? now]) {
+    final end = endOfDay(now ?? DateTime.now());
+    return upcomingFor(table).where((b) => !b.startAt.isAfter(end)).toList();
+  }
+
+  /// The next booking on [table] that has not run out yet.
+  Booking? nextBookingFor(RestaurantTable table, [DateTime? now]) {
+    final n = now ?? DateTime.now();
+    return upcomingFor(table).where((b) => b.endAt.isAfter(n)).firstOrNull;
+  }
+
+  /// Everything booked on [day], including done, cancelled and no-shows, in time order.
+  Future<List<Booking>> bookingsOn(DateTime day) async {
+    final rows = await _db.query(
+      'bookings',
+      where: 'start_at BETWEEN ? AND ?',
+      whereArgs: [startOfDay(day).millisecondsSinceEpoch, endOfDay(day).millisecondsSinceEpoch],
+      orderBy: 'start_at, id',
+    );
+    return rows.map(Booking.fromRow).toList();
+  }
+
+  /// What [b] would clash with on its table: other bookings not yet started, and the game in
+  /// play until its booked time runs out. Open play has no end, so it clashes with nothing.
+  List<BookingConflict> bookingConflicts(Booking b, [DateTime? now]) {
+    final n = now ?? DateTime.now();
+    final from = b.startAt, to = b.minutes > 0 ? b.endAt : b.startAt.add(const Duration(minutes: 1));
+    final out = <BookingConflict>[
+      for (final o in bookings)
+        if (o.id != b.id && o.tableId == b.tableId && o.isUpcoming && o.overlapsRange(from, to))
+          (name: o.customerName, from: o.startAt, to: o.endAt, playing: false),
+    ];
+    final s = _sessions[b.tableId];
+    if (s != null && s.bookingId != b.id && s.timerStartedAt != null && s.timerState != TimerState.stopped) {
+      final end = s.expectedEnd(n);
+      if (end != null && from.isBefore(end) && n.isBefore(to)) {
+        out.insert(0, (name: s.customerName ?? 'Game in play', from: s.timerStartedAt!, to: end, playing: true));
+      }
+    }
+    return out;
+  }
+
+  static String describeConflict(BookingConflict c) => c.playing
+      ? '${c.name} is playing until ${Fmt.time(c.to)}'
+      : 'Overlaps ${c.name}, ${Fmt.time(c.from)}–${Fmt.time(c.to)}';
+
+  void _tidyBooking(Booking b, {bool walkIn = false}) {
+    b.customerName = b.customerName.trim();
+    if (b.customerName.isEmpty) throw CueBillException("Enter the customer's name.");
+    if (b.minutes < 0 || (b.minutes == 0 && !walkIn)) throw CueBillException('Pick how long the booking is for.');
+    b.customerPhone = Customer.normalisePhone(b.customerPhone);
+    final note = b.note?.trim() ?? '';
+    b.note = note.isEmpty ? null : note;
+    if (tableById(b.tableId) == null) throw CueBillException('Pick a pool table.');
+  }
+
+  /// Adds or changes a booking. Clashes are refused unless [allowOverlap], so staff decide.
+  Future<Booking> saveBooking(Booking b, {bool allowOverlap = false}) async {
+    _tidyBooking(b);
+    if (b.id != null && !b.isUpcoming) throw CueBillException('Only bookings not yet started can be changed.');
+    if (!allowOverlap) {
+      final clash = bookingConflicts(b);
+      if (clash.isNotEmpty) throw CueBillException(describeConflict(clash.first));
+    }
+    final row = b.toRow()..remove('id');
+    if (b.id == null) {
+      b.id = await _db.insert('bookings', row);
+    } else {
+      await _db.update('bookings', row, where: 'id = ?', whereArgs: [b.id]);
+    }
+    bookings
+      ..removeWhere((o) => o.id == b.id)
+      ..add(b)
+      ..sort(_byStart);
+    bookingRevision++;
+    notifyListeners();
+    return b;
+  }
+
+  static int _byStart(Booking a, Booking b) {
+    final c = a.startAt.compareTo(b.startAt);
+    return c != 0 ? c : (a.id ?? 0).compareTo(b.id ?? 0);
+  }
+
+  Future<void> _setBookingStatus(Booking b, String status, {String? reason}) async {
+    b
+      ..status = status
+      ..cancelReason = reason;
+    await _db.update('bookings', {'status': status, 'cancel_reason': reason}, where: 'id = ?', whereArgs: [b.id]);
+    bookings.removeWhere((o) => o.id == b.id);
+    if (b.isActive) {
+      bookings
+        ..add(b)
+        ..sort(_byStart);
+    }
+    bookingRevision++;
+    notifyListeners();
+  }
+
+  Future<void> cancelBooking(Booking b, {String? reason}) async {
+    if (!b.isUpcoming) throw CueBillException('Only bookings not yet started can be cancelled.');
+    final r = reason?.trim() ?? '';
+    await _setBookingStatus(b, 'cancelled', reason: r.isEmpty ? null : r);
+  }
+
+  Future<void> markNoShow(Booking b) async {
+    if (!b.isUpcoming) throw CueBillException('Only bookings not yet started can be marked as no-show.');
+    await _setBookingStatus(b, 'no_show');
+  }
+
+  /// Puts a cancelled or no-show booking back on the list.
+  Future<void> restoreBooking(Booking b) async {
+    if (b.status != 'cancelled' && b.status != 'no_show') return;
+    await _setBookingStatus(b, 'booked');
+  }
+
+  /// The customer has arrived: open the table and start the game for the booked time.
+  /// The booked slot stays as it was; billing counts from now.
+  Future<void> startBooking(Booking b) async {
+    final table = tableById(b.tableId);
+    if (table == null) throw CueBillException('That pool table no longer exists.');
+    if (!b.isUpcoming) throw CueBillException('This booking is not waiting to start.');
+    final open = _sessions[table.id];
+    if (open != null && open.timerStartedAt != null) {
+      throw CueBillException('${table.name} is in use. End the current game first.');
+    }
+    final s = await ensureSession(table);
+    s
+      ..customerName = b.customerName
+      ..customerPhone = b.customerPhone
+      ..customerId = b.customerId
+      ..bookingId = b.id;
+    await startTimer(table, bookedMinutes: b.minutes, note: b.customerName);
+    b
+      ..status = 'playing'
+      ..sessionId = s.id;
+    await _db.update('bookings', {'status': 'playing', 'table_session_id': s.id}, where: 'id = ?', whereArgs: [b.id]);
+    bookingRevision++;
+    notifyListeners();
+  }
+
+  /// A walk-in: a booking from now for [minutes] (0 = open play), started right away.
+  Future<Booking> startWalkIn(
+    RestaurantTable table, {
+    required String name,
+    String? phone,
+    int? customerId,
+    required int minutes,
+    String? note,
+    bool allowOverlap = false,
+  }) async {
+    final open = _sessions[table.id];
+    if (open != null && open.timerStartedAt != null) {
+      throw CueBillException('${table.name} is in use. End the current game first.');
+    }
+    final b = Booking(
+      tableId: table.id!,
+      customerName: name,
+      customerPhone: phone,
+      customerId: customerId,
+      note: note,
+      startAt: DateTime.now(),
+      minutes: minutes,
+    );
+    _tidyBooking(b, walkIn: true);
+    if (!allowOverlap) {
+      final clash = bookingConflicts(b);
+      if (clash.isNotEmpty) throw CueBillException(describeConflict(clash.first));
+    }
+    b.id = await _db.insert('bookings', b.toRow()..remove('id'));
+    bookings
+      ..add(b)
+      ..sort(_byStart);
+    await startBooking(b);
+    return b;
+  }
+
+  /// Bookings not yet started whose time overlaps the game in play on [table], if it runs to
+  /// its booked end (after [extraMinutes] more), e.g. before adding time.
+  List<Booking> bookingsHitBy(RestaurantTable table, {int extraMinutes = 0, DateTime? now}) {
+    final s = _sessions[table.id];
+    final n = now ?? DateTime.now();
+    final end = s?.expectedEnd(n)?.add(Duration(minutes: extraMinutes));
+    if (end == null) return [];
+    return upcomingFor(table).where((b) => b.startAt.isBefore(end) && b.endAt.isAfter(n)).toList();
   }
 
   // ------------------------------------------------------------- checkout
@@ -486,10 +713,22 @@ class AppStore extends ChangeNotifier {
         whereArgs: [session.id],
       );
       await _putAwayTakeaway(txn, table);
+      if (session.bookingId != null) {
+        // Record the time the game actually took, so the day's bookings show it.
+        final took = calc.bookedMinutes ?? calc.billedMinutes;
+        await txn.update(
+          'bookings',
+          {'status': 'done', if (took > 0) 'minutes': took},
+          where: 'id = ?',
+          whereArgs: [session.bookingId],
+        );
+      }
       settings.nextInvoiceNumber = current.nextInvoiceNumber;
     });
 
     _sessions.remove(table.id);
+    bookings.removeWhere((b) => b.id == session.bookingId);
+    bookingRevision++;
     if (table.isTakeaway) tables.removeWhere((t) => t.id == table.id);
     invoiceCount++;
     revision++;

@@ -44,6 +44,7 @@ void main() {
         dir = await Directory.systemTemp.createTemp('cuebill_ui');
         store = await AppStore.open(dbPath: '${dir.path}/ui.sqlite', factory: databaseFactoryFfi, filesDir: dir.path);
         await store.loadSampleSales();
+        await store.saveTable(RestaurantTable(name: 'Pool Table 2', type: 'pool', sort: 1));
         // An open pool table with a running timer and items, and a dining table with items.
         final pool = store.activeTables.first;
         await store.startTimer(pool);
@@ -58,8 +59,19 @@ void main() {
         final booked = store.activeTables[1];
         await store.startTimer(booked, bookedMinutes: 60);
         store.sessionFor(booked)!.timerStartedAt = DateTime.now().subtract(const Duration(minutes: 70));
-        // A third, free pool table for the start dialog.
-        await store.saveTable(RestaurantTable(name: 'Pool Table 3', type: 'pool', sort: 2));
+        // A third, free pool table for the walk-in dialog, with a booking later on.
+        final third = RestaurantTable(name: 'Pool Table 3', type: 'pool', sort: 2);
+        await store.saveTable(third);
+        await store.saveBooking(
+          Booking(
+            tableId: third.id!,
+            customerName: 'Priya with a long name',
+            customerPhone: '9876500000',
+            note: 'Paid ₹100 advance',
+            startAt: DateTime.now().add(const Duration(hours: 3)),
+            minutes: 60,
+          ),
+        );
         // Regulars for the Customers page.
         await store.saveCustomer(Customer(name: 'Lalpeka', phone: '+91 98765 43210', discountPercent: 10));
         await store.saveCustomer(
@@ -122,7 +134,7 @@ void main() {
       expect(find.text('+1 hour'), findsOneWidget);
       await tester.tap(find.text('Adjust'));
       await settle(tester);
-      expect(find.text('Timer history'), findsOneWidget);
+      expect(find.text('Game history'), findsOneWidget);
       expect(tester.takeException(), isNull, reason: 'adjust dialog');
       await tester.tap(find.text('Cancel'));
       await settle(tester);
@@ -141,26 +153,107 @@ void main() {
         await tester.tap(find.text('Order'));
         await settle(tester);
       }
-      expect(find.text('Stop & checkout').hitTestable(), findsOneWidget);
+      expect(find.text('End & checkout').hitTestable(), findsOneWidget);
       expect(tester.takeException(), isNull, reason: 'long order');
       if (phone) {
-        Navigator.of(tester.element(find.text('Stop & checkout'))).pop();
+        Navigator.of(tester.element(find.text('End & checkout'))).pop();
         await settle(tester);
       }
 
-      // Free pool table: pick a booking and start.
+      // Free pool table: a walk-in with the customer's name and hours.
       final third = store.activeTables.firstWhere((t) => t.name == 'Pool Table 3');
       nav.selectTable(third.id);
       await settle(tester);
-      await tester.tap(find.text(phone ? 'Start' : 'Start timer').last);
+      await tester.tap(find.text('Walk-in').last);
       await settle(tester);
-      expect(find.text('How long is the table booked for?'), findsOneWidget);
+      expect(find.text('How long?'), findsOneWidget);
+      final nameField = find.descendant(
+        of: find.widgetWithText(FieldLabel, 'Customer name'),
+        matching: find.byType(TextField),
+      );
+      await tester.enterText(nameField, 'Ravi');
+      await settle(tester);
       await tester.tap(find.text('1h 30m'));
       await settle(tester);
-      await tester.tap(find.text('Start timer').last);
+      await tester.tap(find.text('Start now').last);
       await settle(tester);
       expect(store.sessionFor(third)!.bookedMinutes, 90);
-      expect(tester.takeException(), isNull, reason: 'start dialog');
+      expect(store.sessionFor(third)!.customerName, 'Ravi');
+      expect(tester.takeException(), isNull, reason: 'walk-in dialog');
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.runAsync(() async {
+        await store.close();
+        await dir.delete(recursive: true);
+      });
+    });
+
+    testWidgets('bookings page at ${size.width.toInt()} px: free slots, start a booking, checkout knows who', (
+      tester,
+    ) async {
+      late RestaurantTable pool;
+      final tomorrow = DateUtils.dateOnly(DateTime.now()).add(const Duration(days: 1));
+      await tester.runAsync(() async {
+        dir = await Directory.systemTemp.createTemp('cuebill_bookings_ui');
+        store = await AppStore.open(dbPath: '${dir.path}/b.sqlite', factory: databaseFactoryFfi, filesDir: dir.path);
+        pool = store.activeTables.firstWhere((t) => t.isPool);
+        for (final (name, hour) in [('Ravi', 10), ('Mama', 14)]) {
+          await store.saveBooking(
+            Booking(
+              tableId: pool.id!,
+              customerName: name,
+              startAt: tomorrow.add(Duration(hours: hour)),
+              minutes: 60,
+            ),
+          );
+        }
+      });
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+
+      await tester.pumpWidget(CueBillApp(store: store));
+      await settle(tester);
+      final nav = tester.element(find.byType(AppShell)).read<Nav>();
+      nav.go(Section.bookings);
+      await settle(tester);
+      expect(find.text('Nothing booked'), findsOneWidget);
+      await tester.tap(find.byTooltip('Next day'));
+      await settle(tester);
+      expect(find.text('2 bookings · 2h booked'), findsOneWidget);
+      expect(find.textContaining('Free 11:00 AM – 2:00 PM'), findsOneWidget);
+      expect(tester.takeException(), isNull, reason: 'bookings page');
+
+      // The pool table shows who is next.
+      nav.go(Section.pos);
+      await settle(tester);
+      expect(find.textContaining('Next Ravi'), findsWidgets);
+      nav.go(Section.bookings);
+      await settle(tester);
+      await tester.tap(find.byTooltip('Next day'));
+      await settle(tester);
+
+      // Ravi arrives early: start, confirm, and the table opens for him.
+      await tester.tap(find.text('Start').first);
+      await settle(tester);
+      await tester.tap(find.text('Start now'));
+      await settle(tester);
+      expect(nav.section, Section.pos);
+      final s = store.sessionFor(pool)!;
+      expect(s.customerName, 'Ravi');
+      expect(s.bookedMinutes, 60);
+      expect(tester.takeException(), isNull, reason: 'booking started');
+
+      // Checkout already has his name.
+      s.timerStartedAt = DateTime.now().subtract(const Duration(minutes: 50));
+      nav.openCheckout(pool.id!);
+      await settle(tester);
+      final nameField = find.descendant(
+        of: find.widgetWithText(FieldLabel, 'Customer name (optional)'),
+        matching: find.byType(TextField),
+      );
+      expect(tester.widget<TextField>(nameField).controller!.text, 'Ravi');
+      expect(tester.takeException(), isNull, reason: 'checkout prefilled');
 
       await tester.pumpWidget(const SizedBox());
       await tester.runAsync(() async {

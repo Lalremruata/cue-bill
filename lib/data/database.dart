@@ -8,7 +8,7 @@ import 'models.dart';
 class AppDatabase {
   AppDatabase._();
 
-  static const version = 5;
+  static const version = 6;
 
   static Future<Database> open(String path, DatabaseFactory factory) {
     return factory.openDatabase(
@@ -60,6 +60,10 @@ class AppDatabase {
         timer_stopped_at INTEGER,
         hourly_rate REAL,
         booked_minutes INTEGER,
+        customer_name TEXT,
+        customer_phone TEXT,
+        customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL,
+        booking_id INTEGER,
         created_at INTEGER)''',
       'CREATE INDEX table_sessions_status ON table_sessions (restaurant_table_id, status)',
       '''CREATE TABLE session_items (
@@ -118,6 +122,8 @@ class AppDatabase {
       'CREATE INDEX invoice_items_invoice ON invoice_items (invoice_id)',
       _sessionEvents,
       _sessionEventsIndex,
+      _bookings,
+      _bookingsIndex,
     ];
     for (final sql in statements) {
       await db.execute(sql);
@@ -145,6 +151,22 @@ class AppDatabase {
         created_at INTEGER)''';
   static const _customersPhone = 'CREATE UNIQUE INDEX customers_phone ON customers (phone) WHERE phone IS NOT NULL';
   static const _invoicesCustomer = 'CREATE INDEX invoices_customer ON invoices (customer_id)';
+
+  /// Pool table bookings: who, when, how long. Walk-ins are bookings that start right away.
+  static const _bookings = '''CREATE TABLE bookings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        restaurant_table_id INTEGER NOT NULL REFERENCES restaurant_tables(id) ON DELETE CASCADE,
+        customer_name TEXT NOT NULL,
+        customer_phone TEXT,
+        customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL,
+        note TEXT,
+        start_at INTEGER NOT NULL,
+        minutes INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'booked',
+        table_session_id INTEGER REFERENCES table_sessions(id) ON DELETE SET NULL,
+        cancel_reason TEXT,
+        created_at INTEGER)''';
+  static const _bookingsIndex = 'CREATE INDEX bookings_table_start ON bookings (restaurant_table_id, start_at)';
 
   /// Brings an older database (or an older backup being restored) up to [version].
   static Future<void> upgrade(Database db, int from, int to) async {
@@ -181,6 +203,17 @@ class AppDatabase {
         'ALTER TABLE invoices ADD COLUMN customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL',
       );
       await db.execute(_invoicesCustomer);
+    }
+    if (from < 6) {
+      // v6: pool table bookings, and who is playing on each open table.
+      await db.execute('ALTER TABLE table_sessions ADD COLUMN customer_name TEXT');
+      await db.execute('ALTER TABLE table_sessions ADD COLUMN customer_phone TEXT');
+      await db.execute(
+        'ALTER TABLE table_sessions ADD COLUMN customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL',
+      );
+      await db.execute('ALTER TABLE table_sessions ADD COLUMN booking_id INTEGER');
+      await db.execute(_bookings);
+      await db.execute(_bookingsIndex);
     }
   }
 
@@ -248,8 +281,7 @@ class AppDatabase {
     }
 
     const tables = [
-      ('Pool Table 1', 'pool'),
-      ('Pool Table 2', 'pool'),
+      ('Pool Table', 'pool'),
       ('Table 1', 'dining'),
       ('Table 2', 'dining'),
       ('Table 3', 'dining'),

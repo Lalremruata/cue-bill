@@ -42,6 +42,21 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   String _lookup = '';
 
   @override
+  void initState() {
+    super.initState();
+    // A pool game started from a booking: the customer is already known.
+    final store = context.read<AppStore>();
+    final table = store.tableById(widget.tableId);
+    final s = table == null ? null : store.sessionFor(table);
+    if (s?.customerName != null) {
+      _name.text = s!.customerName!;
+      _phone.text = s.customerPhone ?? '';
+      final regular = store.customerById(s.customerId) ?? store.customerByPhone(s.customerPhone);
+      if (regular != null) WidgetsBinding.instance.addPostFrameCallback((_) => mounted ? _pick(regular) : null);
+    }
+  }
+
+  @override
   void dispose() {
     _customDiscount.dispose();
     _name.dispose();
