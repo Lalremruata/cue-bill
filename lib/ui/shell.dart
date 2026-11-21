@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../core/format.dart';
 import '../data/store.dart';
 import '../services/drive_sync.dart';
+import 'screens/bookings_screen.dart';
 import 'screens/checkout_screen.dart';
 import 'screens/customers_screen.dart';
 import 'screens/dashboard_screen.dart';
@@ -14,12 +15,13 @@ import 'screens/reports_screen.dart';
 import 'screens/settings_screen.dart';
 import 'theme.dart';
 
-enum Section { dashboard, pos, takeaway, invoices, customers, reports, menu, settings }
+enum Section { dashboard, pos, bookings, takeaway, invoices, customers, reports, menu, settings }
 
 extension SectionInfo on Section {
   String get label => switch (this) {
     Section.dashboard => 'Dashboard',
     Section.pos => 'Tables & Orders',
+    Section.bookings => 'Pool bookings',
     Section.takeaway => 'Takeaway',
     Section.invoices => 'Invoices',
     Section.customers => 'Customers',
@@ -31,6 +33,7 @@ extension SectionInfo on Section {
   IconData get icon => switch (this) {
     Section.dashboard => Icons.space_dashboard_outlined,
     Section.pos => Icons.table_restaurant_outlined,
+    Section.bookings => Icons.event_note_outlined,
     Section.takeaway => Icons.takeout_dining_outlined,
     Section.invoices => Icons.receipt_long_outlined,
     Section.customers => Icons.people_outline,
@@ -103,6 +106,7 @@ class AppShell extends StatelessWidget {
       ),
       Section.pos => const PosScreen(),
       Section.takeaway => const TakeawayScreen(),
+      Section.bookings => const BookingsScreen(),
       Section.invoices => const InvoicesScreen(),
       Section.customers => const CustomersScreen(),
       Section.reports => const ReportsScreen(),

@@ -48,6 +48,7 @@ class BusinessSettings {
     this.overtimeGraceMinutes = 5,
     this.bookingWarnMinutes = 5,
     this.overtimeRepeatMinutes = 5,
+    this.bookingReminderMinutes = 10,
     this.bookedIsMinimum = true,
     this.gstFoodRate = 5,
     this.gstPoolRate = 18,
@@ -85,7 +86,7 @@ class BusinessSettings {
   String happyHourStart;
   String happyHourEnd;
 
-  /// Booking picked by default when a pool timer starts; 0 = open play.
+  /// Hours picked by default for a new pool booking; 0 = open play.
   int defaultBookingMinutes;
 
   /// Overtime past a booking that is not charged.
@@ -97,6 +98,9 @@ class BusinessSettings {
   /// Once a booking is over, sound the alert again every this many minutes while the
   /// timer runs; 0 = alert once only.
   int overtimeRepeatMinutes;
+
+  /// Remind staff this many minutes before a pool booking is due; 0 = no reminder.
+  int bookingReminderMinutes;
 
   /// A booking is charged in full even if the table finishes early.
   bool bookedIsMinimum;
@@ -175,6 +179,7 @@ class BusinessSettings {
     'overtime_grace_minutes': overtimeGraceMinutes,
     'booking_warn_minutes': bookingWarnMinutes,
     'overtime_repeat_minutes': overtimeRepeatMinutes,
+    'booking_reminder_minutes': bookingReminderMinutes,
     'booked_is_minimum': bookedIsMinimum,
     'gst_food_rate': gstFoodRate,
     'gst_pool_rate': gstPoolRate,
@@ -214,6 +219,7 @@ class BusinessSettings {
     overtimeGraceMinutes: _i(j['overtime_grace_minutes'], 5),
     bookingWarnMinutes: _i(j['booking_warn_minutes'], 5),
     overtimeRepeatMinutes: _i(j['overtime_repeat_minutes'], 5),
+    bookingReminderMinutes: _i(j['booking_reminder_minutes'], 10),
     bookedIsMinimum: _b(j['booked_is_minimum'], true),
     gstFoodRate: _d(j['gst_food_rate'], 5),
     gstPoolRate: _d(j['gst_pool_rate'], 18),
@@ -519,6 +525,10 @@ class TableSession {
     this.timerStoppedAt,
     this.hourlyRate,
     this.bookedMinutes,
+    this.customerName,
+    this.customerPhone,
+    this.customerId,
+    this.bookingId,
     DateTime? createdAt,
     List<SessionItem>? items,
     List<SessionEvent>? events,
@@ -537,11 +547,29 @@ class TableSession {
 
   /// Booked pool time in minutes; null = open play.
   int? bookedMinutes;
+
+  /// Who is playing, copied from the pool booking; filled in at checkout.
+  String? customerName;
+  String? customerPhone;
+  int? customerId;
+
+  /// The pool booking this game was started from.
+  int? bookingId;
   DateTime createdAt;
   List<SessionItem> items;
   List<SessionEvent> events;
 
   bool get isBooked => (bookedMinutes ?? 0) > 0;
+
+  /// When the booked time runs out if play carries on without a pause; null for open play
+  /// or before the timer starts.
+  DateTime? expectedEnd([DateTime? now]) {
+    final left = remainingSeconds(now);
+    if (left == null || timerState == TimerState.stopped) return null;
+    final n = now ?? DateTime.now();
+    // A paused table is not using up time: count from now.
+    return n.add(Duration(seconds: left));
+  }
 
   /// Seconds left on the booking (negative once over); null for open play or before the timer starts.
   int? remainingSeconds([DateTime? now]) =>
@@ -584,6 +612,10 @@ class TableSession {
     'timer_stopped_at': _ms(timerStoppedAt),
     'hourly_rate': hourlyRate,
     'booked_minutes': bookedMinutes,
+    'customer_name': customerName,
+    'customer_phone': customerPhone,
+    'customer_id': customerId,
+    'booking_id': bookingId,
     'created_at': _ms(createdAt),
   };
 
@@ -597,6 +629,98 @@ class TableSession {
     timerStoppedAt: _dt(r['timer_stopped_at']),
     hourlyRate: r['hourly_rate'] == null ? null : _d(r['hourly_rate']),
     bookedMinutes: r['booked_minutes'] == null ? null : _i(r['booked_minutes']),
+    customerName: _s(r['customer_name']),
+    customerPhone: _s(r['customer_phone']),
+    customerId: r['customer_id'] == null ? null : _i(r['customer_id']),
+    bookingId: r['booking_id'] == null ? null : _i(r['booking_id']),
+    createdAt: _dt(r['created_at']),
+  );
+}
+
+const bookingStatuses = {
+  'booked': 'Booked',
+  'playing': 'Playing',
+  'done': 'Done',
+  'cancelled': 'Cancelled',
+  'no_show': 'No-show',
+};
+
+/// A pool table booking: who, when and for how long. A walk-in is a booking that starts now.
+/// Starting it opens the table and runs the game; checkout marks it done.
+class Booking {
+  Booking({
+    this.id,
+    required this.tableId,
+    required this.customerName,
+    this.customerPhone,
+    this.customerId,
+    this.note,
+    required this.startAt,
+    required this.minutes,
+    this.status = 'booked',
+    this.sessionId,
+    this.cancelReason,
+    DateTime? createdAt,
+  }) : createdAt = createdAt ?? DateTime.now();
+
+  int? id;
+  int tableId;
+  String customerName;
+
+  /// Digits only, last 10 (see [Customer.normalisePhone]).
+  String? customerPhone;
+  int? customerId;
+  String? note;
+  DateTime startAt;
+  int minutes;
+  String status; // booked | playing | done | cancelled | no_show
+  int? sessionId;
+  String? cancelReason;
+  DateTime createdAt;
+
+  DateTime get endAt => startAt.add(Duration(minutes: minutes));
+
+  /// Still to come: not started, cancelled or missed.
+  bool get isUpcoming => status == 'booked';
+  bool get isPlaying => status == 'playing';
+
+  /// Booked or playing: holds the table.
+  bool get isActive => isUpcoming || isPlaying;
+
+  String get statusLabel => bookingStatuses[status] ?? status;
+
+  /// Shares any time with [from]–[to] on the same table.
+  bool overlapsRange(DateTime from, DateTime to) => startAt.isBefore(to) && from.isBefore(endAt);
+
+  Booking copy() => Booking.fromRow(toRow());
+
+  Map<String, Object?> toRow() => {
+    'id': id,
+    'restaurant_table_id': tableId,
+    'customer_name': customerName,
+    'customer_phone': customerPhone,
+    'customer_id': customerId,
+    'note': note,
+    'start_at': _ms(startAt),
+    'minutes': minutes,
+    'status': status,
+    'table_session_id': sessionId,
+    'cancel_reason': cancelReason,
+    'created_at': _ms(createdAt),
+  };
+
+  factory Booking.fromRow(Map<String, Object?> r) => Booking(
+    id: r['id'] == null ? null : _i(r['id']),
+    tableId: _i(r['restaurant_table_id']),
+    customerName: r['customer_name'] as String,
+    customerPhone: _s(r['customer_phone']),
+    customerId: r['customer_id'] == null ? null : _i(r['customer_id']),
+    note: _s(r['note']),
+    startAt: _dt(r['start_at'])!,
+    minutes: _i(r['minutes']),
+    status: _s(r['status']) ?? 'booked',
+    sessionId: r['table_session_id'] == null ? null : _i(r['table_session_id']),
+    cancelReason: _s(r['cancel_reason']),
     createdAt: _dt(r['created_at']),
   );
 }

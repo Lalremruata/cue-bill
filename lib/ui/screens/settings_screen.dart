@@ -77,6 +77,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late int _grace;
   late int _warn;
   late int _repeat;
+  late int _remind;
   late bool _bookedIsMinimum;
   late bool _happy;
   late String _happyStart;
@@ -165,6 +166,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _grace = s.overtimeGraceMinutes;
     _warn = s.bookingWarnMinutes;
     _repeat = s.overtimeRepeatMinutes;
+    _remind = s.bookingReminderMinutes;
     _bookedIsMinimum = s.bookedIsMinimum;
     _happy = s.happyHourEnabled;
     _happyStart = s.happyHourStart;
@@ -201,6 +203,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     overtimeGraceMinutes: _grace,
     bookingWarnMinutes: _warn,
     overtimeRepeatMinutes: _repeat,
+    bookingReminderMinutes: _remind,
     bookedIsMinimum: _bookedIsMinimum,
     poolCostPerHour: _num('pool_cost', base.poolCostPerHour),
     happyHourEnabled: _happy,
@@ -639,15 +642,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           const CardHeader('UPI payments', bottom: 6),
-          CheckboxListTile(
-            contentPadding: EdgeInsets.zero,
-            controlAffinity: ListTileControlAffinity.leading,
-            title: const Text('Print UPI QR on invoices'),
-            value: _showQr,
-            onChanged: (v) => setState(() {
-              _showQr = v ?? true;
-              _dirty = true;
-            }),
+          // Own Material, so the tile's ink is not hidden by the card's colour.
+          Material(
+            type: MaterialType.transparency,
+            child: CheckboxListTile(
+              contentPadding: EdgeInsets.zero,
+              controlAffinity: ListTileControlAffinity.leading,
+              title: const Text('Print UPI QR on invoices'),
+              value: _showQr,
+              onChanged: (v) => setState(() {
+                _showQr = v ?? true;
+                _dirty = true;
+              }),
+            ),
           ),
           const SizedBox(height: 8),
           FieldRow(
@@ -767,12 +774,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
             style: CbText.muted(context, 12.5),
           ),
           const SizedBox(height: 20),
-          Text('Booked time', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14.5, color: cb.ink)),
+          Text(
+            'Bookings',
+            style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14.5, color: cb.ink),
+          ),
           const SizedBox(height: 4),
           Text(
-            'When a timer starts, staff pick how long the table is booked for, or open play. '
-            'The timer counts down and the table is flagged when time is up. It keeps running until stopped, '
-            'and the alert sounds again while it runs over.',
+            'Every game starts from a booking with the customer\'s name and hours: booked ahead on the '
+            'Pool bookings page, or a walk-in started on the spot. The game counts down and the table is '
+            'flagged when time is up. It keeps running until ended, and the alert sounds again while it runs over.',
             style: CbText.muted(context, 12.5),
           ),
           const SizedBox(height: 12),
@@ -780,7 +790,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             breakpoint: 560,
             children: [
               select(
-                'Booking picked first',
+                'Hours picked first',
                 _defaultBooking,
                 const [0, 30, 60, 90, 120],
                 (v) => _defaultBooking = v,
@@ -813,6 +823,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 (v) => _repeat = v,
                 (v) => v == 0 ? 'Once only' : 'Every $v minutes',
               ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          FieldRow(
+            breakpoint: 560,
+            children: [
+              select(
+                'Remind before a booking',
+                _remind,
+                const [0, 5, 10, 15, 30],
+                (v) => _remind = v,
+                (v) => v == 0 ? 'No reminder' : '$v minutes before',
+              ),
+              const SizedBox.shrink(),
             ],
           ),
           const SizedBox(height: 6),
@@ -1109,12 +1133,15 @@ class _DriveCard extends StatelessWidget {
           const SizedBox(height: 8),
           ValidationNote(ok: false, text: 'Last try failed: ${drive.lastError}'),
         ],
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          title: const Text('Back up daily'),
-          subtitle: const Text('Once a day while CueBill is open and online'),
-          value: settings.driveAutoBackup,
-          onChanged: (v) => drive.setAutoBackup(v),
+        Material(
+          type: MaterialType.transparency,
+          child: SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Back up daily'),
+            subtitle: const Text('Once a day while CueBill is open and online'),
+            value: settings.driveAutoBackup,
+            onChanged: (v) => drive.setAutoBackup(v),
+          ),
         ),
         Wrap(
           spacing: 10,

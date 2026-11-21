@@ -9,6 +9,7 @@ import '../../core/billing.dart';
 import '../../core/format.dart';
 import '../../data/models.dart';
 import '../../data/store.dart';
+import '../bookings.dart';
 import '../shell.dart';
 import '../theme.dart';
 import '../widgets.dart';
@@ -23,6 +24,10 @@ Color _accentOnDark(BookingState b) => switch (b) {
   BookingState.warning => _warnOnDark,
   _ => Colors.white,
 };
+
+/// `6:00 PM` today, or `22 Nov 6:00 PM` on another day.
+String _when(DateTime t, DateTime now) =>
+    DateUtils.isSameDay(t, now) ? Fmt.time(t) : '${Fmt.shortDate(t)} ${Fmt.time(t)}';
 
 /// `18:22` left, or `+03:12` over.
 String _countdown(int left) => left > 0 ? Fmt.timer(left) : '+${Fmt.timer(-left)}';
@@ -40,7 +45,7 @@ class PosScreen extends StatelessWidget {
 
     final header = PageHeader(
       title: 'Tables & Orders',
-      subtitle: 'Pick a table, start the pool timer, add food and drinks.',
+      subtitle: 'Pick a table, start a pool booking or a walk-in, add food and drinks.',
       actions: [
         const LegendItem(label: 'In play', dot: DotState.running),
         const LegendItem(label: 'Paused / ordering', dot: DotState.busy),
@@ -176,26 +181,45 @@ DotState dotFor(TableSession? s, RestaurantTable t) {
 
 // ------------------------------------------------------------------ timer actions
 
-/// Asks how long the table is booked for, then starts the timer.
-Future<void> _startTimer(BuildContext context, RestaurantTable table) async {
-  final store = context.read<AppStore>();
-  final minutes = await showDialog<int>(
-    context: context,
-    builder: (_) => _StartTimerDialog(table: table, settings: store.settings),
-  );
-  if (minutes != null) await store.startTimer(table, bookedMinutes: minutes);
-}
+/// A walk-in: asks who is playing and for how long, then starts the game.
+Future<void> _startWalkIn(BuildContext context, RestaurantTable table) =>
+    showBookingDialog(context, table: table, walkIn: true);
 
+/// Ends the game in play; the time is billed up to now.
 Future<void> _stopTimer(BuildContext context, RestaurantTable table) async {
   final store = context.read<AppStore>();
+  final who = store.sessionFor(table)?.customerName;
   final ok = await confirmDialog(
     context,
-    title: 'Stop the timer?',
-    message: 'The pool time for ${table.name} is billed up to now. You cannot restart this timer.',
-    confirm: 'Stop timer',
+    title: 'End the game?',
+    message:
+        'The pool time for ${who ?? table.name} is billed up to now. '
+        'You cannot restart this game; check out to free the table.',
+    confirm: 'End game',
     danger: true,
   );
   if (ok) await store.stopTimer(table);
+}
+
+/// Adds time, asking first if the game would then run into a booking.
+Future<void> _extend(BuildContext context, RestaurantTable table, int minutes) async {
+  final store = context.read<AppStore>();
+  final before = store.bookingsHitBy(table).map((b) => b.id).toSet();
+  final hit = store.bookingsHitBy(table, extraMinutes: minutes).where((b) => !before.contains(b.id)).toList();
+  if (hit.isNotEmpty) {
+    final b = hit.first;
+    final ok = await confirmDialog(
+      context,
+      title: 'Run into ${b.customerName}\'s booking?',
+      message:
+          '${b.customerName} has booked ${table.name} at ${Fmt.time(b.startAt)}. '
+          'Adding ${Billing.duration(minutes)} keeps the table busy until '
+          '${Fmt.time(store.sessionFor(table)!.expectedEnd()!.add(Duration(minutes: minutes)))}.',
+      confirm: 'Add time anyway',
+    );
+    if (!ok) return;
+  }
+  await store.extendBooking(table, minutes);
 }
 
 Future<void> _adjustTimer(BuildContext context, RestaurantTable table) => showDialog<void>(
@@ -248,6 +272,7 @@ class BookingAlerts extends StatefulWidget {
 
 class _BookingAlertsState extends State<BookingAlerts> {
   final _tracker = BookingAlertTracker();
+  final _reminders = BookingReminderTracker();
 
   @override
   void initState() {
@@ -277,7 +302,7 @@ class _BookingAlertsState extends State<BookingAlerts> {
       final overMinutes = -left ~/ 60;
       final message = switch (alert) {
         BookingAlert.timeUp => '${table.name}: booked time is up.',
-        BookingAlert.stillOver => '${table.name}: time up, $overMinutes min over. Stop or extend the timer.',
+        BookingAlert.stillOver => '${table.name}: time up, $overMinutes min over. End the game or add time.',
         BookingAlert.warning => '${table.name}: ${(left / 60).ceil()} min left.',
       };
       final over = alert != BookingAlert.warning;
@@ -285,27 +310,54 @@ class _BookingAlertsState extends State<BookingAlerts> {
         SystemSound.play(SystemSoundType.alert);
         HapticFeedback.heavyImpact();
       }
-      ScaffoldMessenger.maybeOf(context)
-        ?..hideCurrentSnackBar()
-        ..showSnackBar(
-          SnackBar(
-            content: Text(message),
-            backgroundColor: over ? const Color(0xFFB42318) : const Color(0xFF8A4B08),
-            width: MediaQuery.sizeOf(context).width > 700 ? 420 : null,
-            duration: const Duration(seconds: 8),
-            action: SnackBarAction(
-              label: 'Show',
-              textColor: Colors.white,
-              onPressed: () {
-                final nav = context.read<Nav>();
-                nav.go(Section.pos);
-                nav.selectTable(table.id);
-              },
-            ),
-          ),
-        );
+      _show(message, table, urgent: over);
     }
     _tracker.forgetExcept(open);
+
+    // Bookings coming up or due now.
+    final waiting = <int>{};
+    for (final table in store.activeTables.where((t) => t.isPool)) {
+      for (final b in store.todayFor(table, now)) {
+        waiting.add(b.id!);
+        final r = _reminders.check(b, now, remindMinutes: settings.bookingReminderMinutes);
+        if (r == null) continue;
+        final busy = store.sessionFor(table)?.timerStartedAt != null;
+        final message = switch (r) {
+          BookingReminder.soon =>
+            '${b.customerName}\'s booking on ${table.name} at ${Fmt.time(b.startAt)}'
+                '${busy ? '. The table is still in play.' : '.'}',
+          BookingReminder.due =>
+            busy
+                ? '${b.customerName} is due now on ${table.name}, but the table is still in play.'
+                : '${b.customerName}\'s booking on ${table.name} starts now. Start it or mark a no-show.',
+        };
+        if (r == BookingReminder.due) SystemSound.play(SystemSoundType.alert);
+        _show(message, table, urgent: r == BookingReminder.due && busy);
+      }
+    }
+    _reminders.forgetExcept(waiting);
+  }
+
+  void _show(String message, RestaurantTable table, {required bool urgent}) {
+    ScaffoldMessenger.maybeOf(context)
+      ?..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: urgent ? const Color(0xFFB42318) : const Color(0xFF8A4B08),
+          width: MediaQuery.sizeOf(context).width > 700 ? 420 : null,
+          duration: const Duration(seconds: 8),
+          action: SnackBarAction(
+            label: 'Show',
+            textColor: Colors.white,
+            onPressed: () {
+              final nav = context.read<Nav>();
+              nav.go(Section.pos);
+              nav.selectTable(table.id);
+            },
+          ),
+        ),
+      );
   }
 
   @override
@@ -313,6 +365,34 @@ class _BookingAlertsState extends State<BookingAlerts> {
 }
 
 enum BookingAlert { warning, timeUp, stillOver }
+
+enum BookingReminder { soon, due }
+
+/// Decides when a booking not yet started should remind staff: once when it is
+/// [remindMinutes] away (0 = no reminder), and once when it is due. Nothing fires once the
+/// booked slot is over.
+class BookingReminderTracker {
+  final _fired = <int, BookingReminder>{};
+
+  BookingReminder? check(Booking b, DateTime now, {required int remindMinutes}) {
+    final id = b.id;
+    if (id == null || !b.isUpcoming || !now.isBefore(b.endAt)) return null;
+    final last = _fired[id];
+    if (!now.isBefore(b.startAt)) {
+      if (last == BookingReminder.due) return null;
+      _fired[id] = BookingReminder.due;
+      return BookingReminder.due;
+    }
+    if (remindMinutes > 0 && last == null && !now.isBefore(b.startAt.subtract(Duration(minutes: remindMinutes)))) {
+      _fired[id] = BookingReminder.soon;
+      return BookingReminder.soon;
+    }
+    return null;
+  }
+
+  /// Drops bookings that are no longer waiting.
+  void forgetExcept(Set<int> waiting) => _fired.removeWhere((id, _) => !waiting.contains(id));
+}
 
 /// Decides when a booked table should alert, one call per table per clock tick.
 ///
@@ -443,31 +523,35 @@ class _TableCard extends StatelessWidget {
         final subtitle = table.isPool ? 'Pool table · ${Fmt.inr(rate)}/hr' : table.typeLabel;
         final booking = session?.bookingState(store.settings.bookingWarnMinutes, now) ?? BookingState.none;
 
+        final next = table.isPool ? store.nextBookingFor(table, now) : null;
+        final nextText = next == null ? null : 'Next ${next.customerName} ${_when(next.startAt, now)}';
+        final who = session?.customerName;
         String value;
         String sub;
         if (session == null) {
           value = 'Free';
-          sub = 'Tap to open';
+          sub = table.isPool ? (nextText ?? 'No bookings') : 'Tap to open';
         } else {
           final calc = store.calcFor(table, now: now)!;
           final left = session.remainingSeconds(now);
+          final whoText = who == null ? '' : '$who · ';
           if (table.isPool && session.timerStartedAt != null && left != null) {
             value = _countdown(left);
             final paused = session.timerState == TimerState.paused ? 'Paused · ' : '';
             sub = switch (booking) {
-              BookingState.over => 'Time up · ${Fmt.inr(calc.totals.total)}',
-              _ => '$paused${left > 0 ? 'left' : 'done'} · ${Fmt.inr(calc.totals.total)}',
+              BookingState.over => '${whoText}Time up · ${Fmt.inr(calc.totals.total)}',
+              _ => '$whoText$paused${left > 0 ? 'left' : 'done'} · ${Fmt.inr(calc.totals.total)}',
             };
           } else if (table.isPool && session.timerStartedAt != null) {
             value = Fmt.timer(session.elapsedSeconds(now));
-            sub = '${Fmt.inr(calc.totals.total)} so far';
+            sub = '$whoText${Fmt.inr(calc.totals.total)} so far';
           } else if (session.items.isNotEmpty) {
             value = Fmt.inr(calc.totals.total);
             final n = session.itemCount;
-            sub = '$n item${n == 1 ? '' : 's'}';
+            sub = '$n item${n == 1 ? '' : 's'}${table.isPool ? ' · no game yet' : ''}';
           } else {
             value = 'Open';
-            sub = table.isPool ? 'Timer not started' : 'No items yet';
+            sub = table.isPool ? (nextText ?? 'No game yet') : 'No items yet';
           }
         }
 
@@ -485,7 +569,8 @@ class _TableCard extends StatelessWidget {
         return Semantics(
           button: true,
           selected: selected,
-          label: '${table.name}, ${dot == DotState.free ? 'free' : value}$stateLabel',
+          label:
+              '${table.name}, ${dot == DotState.free ? 'free' : value}${who == null ? '' : ', $who playing'}$stateLabel',
           child: Container(
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(14),
@@ -632,7 +717,7 @@ class _OrderPanelState extends State<_OrderPanel> {
                 Text(
                   widget.takeaway
                       ? 'Tap New takeaway to start an order, or tap an open one.'
-                      : 'Tap a table to open it, start the pool timer or add food.',
+                      : 'Tap a table to open it, start a pool booking or add food.',
                   style: TextStyle(color: Colors.white.withValues(alpha: 0.72), fontSize: 13.5),
                 ),
               ],
@@ -700,6 +785,7 @@ class _OrderPanelState extends State<_OrderPanel> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _PanelHeader(table: table, session: session, compact: widget.inSheet),
+            if (table.isPool) _TodayBookings(table: table),
             if (lines.isNotEmpty)
               Container(
                 padding: const EdgeInsets.fromLTRB(20, 10, 20, 8),
@@ -715,6 +801,52 @@ class _OrderPanelState extends State<_OrderPanel> {
             _PanelFooter(table: table, session: session, inSheet: widget.inSheet),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Under the pool table header: the rest of today's bookings, so nobody needs a paper list.
+class _TodayBookings extends StatelessWidget {
+  const _TodayBookings({required this.table});
+
+  final RestaurantTable table;
+
+  static const _shown = 3;
+
+  @override
+  Widget build(BuildContext context) {
+    final store = context.watch<AppStore>();
+    final cb = context.cb;
+    final list = store.todayFor(table);
+    final more = list.length - _shown;
+    final nav = context.read<Nav>();
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 10, 12, 6),
+      decoration: BoxDecoration(
+        color: cb.soft,
+        border: Border(bottom: BorderSide(color: cb.line)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  list.isEmpty ? 'No more bookings today' : "Today's bookings · ${list.length}",
+                  style: TextStyle(color: cb.ink, fontWeight: FontWeight.w600, fontSize: 13.5),
+                ),
+              ),
+              TextButton(
+                style: TextButton.styleFrom(minimumSize: const Size(0, 32), visualDensity: VisualDensity.compact),
+                onPressed: () => nav.go(Section.bookings),
+                child: Text(more > 0 ? 'All bookings (+$more)' : 'All bookings'),
+              ),
+            ],
+          ),
+          for (final b in list.take(_shown)) BookingTile(booking: b, compact: true),
+        ],
       ),
     );
   }
@@ -773,10 +905,10 @@ class _PanelHeader extends StatelessWidget {
     final booked = s?.bookedMinutes;
     final bookedText = booked == null ? 'open play' : 'booked ${Billing.duration(booked)}';
     final statusText = switch (state) {
-      TimerState.idle => s == null ? 'Free' : 'Timer not started',
+      TimerState.idle => s == null ? 'Free' : 'No game yet',
       TimerState.running => 'In play · $bookedText',
       TimerState.paused => 'Paused · $bookedText',
-      TimerState.stopped => 'Timer stopped',
+      TimerState.stopped => 'Game ended',
     };
 
     // Compact: tighter buttons so the four timer buttons fit one row on a phone.
@@ -823,13 +955,11 @@ class _PanelHeader extends StatelessWidget {
         List<Widget> extend() => [
           for (final (m, label) in const [(30, '+30 min'), (60, '+1 hour')])
             urgent
-                ? FilledButton(style: dense, onPressed: () => store.extendBooking(table, m), child: Text(label))
-                : OutlinedButton(
-                    style: darkOutline,
-                    onPressed: () => store.extendBooking(table, m),
-                    child: Text(label),
-                  ),
+                ? FilledButton(style: dense, onPressed: () => _extend(context, table, m), child: Text(label))
+                : OutlinedButton(style: darkOutline, onPressed: () => _extend(context, table, m), child: Text(label)),
         ];
+        final next = store.nextBookingFor(table, now);
+        final clash = store.bookingsHitBy(table, now: now).firstOrNull;
 
         final billable = calc != null && calc.billedMinutes > 0
             ? ' · billable ${Billing.duration(calc.billedMinutes)}'
@@ -846,25 +976,100 @@ class _PanelHeader extends StatelessWidget {
               'min ${settings.minimumMinutes} min$billable';
         }
 
+        final titleBlock = Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              table.name,
+              style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 2),
+            Text('Pool table · $statusText', style: TextStyle(color: dim, fontSize: 13.5)),
+          ],
+        );
+
+        if (state == TimerState.idle) {
+          // No game: who is booked next, and start a walk-in or take a booking.
+          final due = next != null && !now.isBefore(next.startAt.subtract(const Duration(minutes: 15)));
+          final String freeText;
+          if (next == null) {
+            freeText = 'No more bookings. Free for walk-ins.';
+          } else if (!DateUtils.isSameDay(next.startAt, now)) {
+            freeText = 'No more bookings today. Next: ${next.customerName}, ${_when(next.startAt, now)}.';
+          } else if (!now.isBefore(next.startAt)) {
+            freeText = '${next.customerName} is booked now (${bookingSlot(next.startAt, next.endAt)}).';
+          } else {
+            final gap = next.startAt.difference(now).inMinutes;
+            freeText = 'Free until ${Fmt.time(next.startAt)} (${Billing.duration(gap)}). Next: ${next.customerName}.';
+          }
+          return _DarkHeader(
+            compact: compact,
+            children: [
+              titleBlock,
+              const SizedBox(height: 12),
+              Text(
+                freeText,
+                style: TextStyle(
+                  color: due ? _warnOnDark : Colors.white,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                  height: 1.35,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                '${Fmt.inr(rate)}/hr · billed in ${settings.billingBlockMinutes}-min blocks',
+                style: TextStyle(color: dim, fontSize: 13, fontFeatures: tabular),
+              ),
+              SizedBox(height: compact ? 12 : 14),
+              Wrap(
+                spacing: compact ? 8 : 10,
+                runSpacing: 10,
+                children: [
+                  if (due)
+                    FilledButton.icon(
+                      style: dense,
+                      onPressed: () => startBookingFlow(context, next),
+                      icon: const Icon(Icons.play_arrow_rounded, size: 20),
+                      label: Text('Start ${next.customerName}'),
+                    ),
+                  if (due)
+                    OutlinedButton(
+                      style: darkOutline,
+                      onPressed: () => _startWalkIn(context, table),
+                      child: const Text('Walk-in'),
+                    )
+                  else
+                    FilledButton.icon(
+                      style: dense,
+                      onPressed: () => _startWalkIn(context, table),
+                      icon: const Icon(Icons.play_arrow_rounded, size: 20),
+                      label: const Text('Walk-in'),
+                    ),
+                  OutlinedButton.icon(
+                    style: darkOutline,
+                    onPressed: () => showBookingDialog(context, table: table),
+                    icon: const Icon(Icons.event_available_outlined, size: 18),
+                    label: const Text('Book'),
+                  ),
+                ],
+              ),
+            ],
+          );
+        }
+
+        final nextText = next == null
+            ? null
+            : 'Next: ${next.customerName} at ${_when(next.startAt, now)}'
+                  '${clash != null ? ' · this game runs into it' : ''}';
+
         return _DarkHeader(
           compact: compact,
           children: [
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        table.name,
-                        style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w700),
-                      ),
-                      const SizedBox(height: 2),
-                      Text('Pool table · $statusText', style: TextStyle(color: dim, fontSize: 13.5)),
-                    ],
-                  ),
-                ),
+                Expanded(child: titleBlock),
                 if (s?.timerStartedAt != null)
                   Padding(
                     padding: const EdgeInsets.only(top: 4),
@@ -878,6 +1083,23 @@ class _PanelHeader extends StatelessWidget {
                   ),
               ],
             ),
+            if (s?.customerName != null) ...[
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  const Icon(Icons.person_outline, size: 18, color: Colors.white),
+                  const SizedBox(width: 6),
+                  Flexible(
+                    child: Text(
+                      [s!.customerName!, if (s.customerPhone != null) s.customerPhone!].join(' · '),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: Colors.white, fontSize: 15.5, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
+              ),
+            ],
             const SizedBox(height: 10),
             Semantics(
               liveRegion: false,
@@ -940,19 +1162,32 @@ class _PanelHeader extends StatelessWidget {
               rules,
               style: TextStyle(color: dim, fontSize: 13, fontFeatures: tabular),
             ),
+            if (nextText != null && state != TimerState.stopped) ...[
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  Icon(Icons.event_outlined, size: 16, color: clash != null ? _warnOnDark : dim),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      nextText,
+                      style: TextStyle(
+                        color: clash != null ? _warnOnDark : dim,
+                        fontSize: 13,
+                        fontWeight: clash != null ? FontWeight.w600 : FontWeight.w400,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
             SizedBox(height: compact ? 12 : 14),
             Wrap(
               spacing: compact ? 8 : 10,
               runSpacing: 10,
               crossAxisAlignment: WrapCrossAlignment.center,
               children: switch (state) {
-                TimerState.idle => [
-                  FilledButton.icon(
-                    onPressed: () => _startTimer(context, table),
-                    icon: const Icon(Icons.play_arrow_rounded, size: 20),
-                    label: const Text('Start timer'),
-                  ),
-                ],
+                TimerState.idle => const <Widget>[],
                 TimerState.running => [
                   if (s!.isBooked) ...extend(),
                   OutlinedButton(
@@ -963,7 +1198,7 @@ class _PanelHeader extends StatelessWidget {
                   OutlinedButton(
                     style: stopStyle,
                     onPressed: () => _stopTimer(context, table),
-                    child: const Text('Stop timer'),
+                    child: const Text('End game'),
                   ),
                 ],
                 TimerState.paused => [
@@ -972,12 +1207,12 @@ class _PanelHeader extends StatelessWidget {
                   OutlinedButton(
                     style: stopStyle,
                     onPressed: () => _stopTimer(context, table),
-                    child: const Text('Stop timer'),
+                    child: const Text('End game'),
                   ),
                 ],
                 TimerState.stopped => [
                   Text(
-                    'Stopped at ${Fmt.time(s!.timerStoppedAt!)}. Ready for checkout.',
+                    'Game ended at ${Fmt.time(s!.timerStoppedAt!)}. Ready for checkout.',
                     style: TextStyle(color: dim, fontSize: 13),
                   ),
                 ],
@@ -1167,7 +1402,10 @@ class _PanelFooter extends StatelessWidget {
                                 title: table.isTakeaway ? 'Cancel ${table.name}?' : 'Clear ${table.name}?',
                                 message: table.isTakeaway
                                     ? 'This removes the takeaway order without billing.'
-                                    : 'This removes the order and the timer without billing. Use it for a table opened by mistake.',
+                                    : table.isPool && session?.bookingId != null
+                                    ? 'This removes the order and the game without billing, and marks the booking cancelled. '
+                                          'Use it for a game started by mistake; you can restore the booking from Bookings.'
+                                    : 'This removes the order and the game without billing. Use it for a table opened by mistake.',
                                 confirm: table.isTakeaway ? 'Cancel order' : 'Clear table',
                                 danger: true,
                               );
@@ -1192,7 +1430,7 @@ class _PanelFooter extends StatelessWidget {
                             },
                       child: Text(
                         table.isPool && session?.timerState != TimerState.stopped && session?.timerStartedAt != null
-                            ? 'Stop & checkout'
+                            ? 'End & checkout'
                             : 'Checkout',
                       ),
                     ),
@@ -1231,18 +1469,24 @@ class _OrderBar extends StatelessWidget {
 
         final String status;
         if (s == null) {
-          status = table.isPool ? 'Free · start the timer' : 'Free · tap a menu item to add it';
+          final next = table.isPool ? store.nextBookingFor(table, now) : null;
+          status = !table.isPool
+              ? 'Free · tap a menu item to add it'
+              : next == null
+              ? 'Free · no bookings'
+              : 'Free · next ${next.customerName} ${_when(next.startAt, now)}';
         } else if (table.isPool && s.timerStartedAt != null) {
           final left = s.remainingSeconds(now);
           final paused = s.timerState == TimerState.paused ? ' · paused' : '';
-          final stopped = s.timerState == TimerState.stopped ? ' · stopped' : '';
+          final stopped = s.timerState == TimerState.stopped ? ' · ended' : '';
+          final who = s.customerName == null ? '' : '${s.customerName} · ';
           status = left == null
-              ? '${Fmt.timer(s.elapsedSeconds(now))} played$paused$stopped'
+              ? '$who${Fmt.timer(s.elapsedSeconds(now))} played$paused$stopped'
               : left > 0
-              ? '${Fmt.timer(left)} left$paused$stopped'
-              : 'Time up · ${_countdown(left)}$stopped';
+              ? '$who${Fmt.timer(left)} left$paused$stopped'
+              : '${who}Time up · ${_countdown(left)}$stopped';
         } else {
-          status = table.isPool ? 'Timer not started' : '$n item${n == 1 ? '' : 's'}';
+          status = table.isPool ? 'No game yet' : '$n item${n == 1 ? '' : 's'}';
         }
 
         return Material(
@@ -1300,7 +1544,7 @@ class _OrderBar extends StatelessWidget {
                   ),
                   const SizedBox(width: 10),
                   if (idlePool)
-                    FilledButton(onPressed: () => _startTimer(context, table), child: const Text('Start'))
+                    FilledButton(onPressed: () => _startWalkIn(context, table), child: const Text('Walk-in'))
                   else
                     OutlinedButton.icon(
                       style: OutlinedButton.styleFrom(
@@ -1325,149 +1569,11 @@ class _OrderBar extends StatelessWidget {
 
 // ------------------------------------------------------------------ dialogs
 
-/// `[–] 1h 15m [+]`
-class _MinuteStepper extends StatelessWidget {
-  const _MinuteStepper({
-    required this.value,
-    required this.step,
-    required this.min,
-    required this.max,
-    required this.onChanged,
-    required this.format,
-    required this.label,
-  });
-
-  final int value;
-  final int step;
-  final int min;
-  final int max;
-  final ValueChanged<int> onChanged;
-  final String Function(int) format;
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    final cb = context.cb;
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        IconButton.outlined(
-          tooltip: 'Less $label',
-          onPressed: value - step >= min ? () => onChanged(value - step) : (value > min ? () => onChanged(min) : null),
-          icon: const Icon(Icons.remove, size: 18),
-        ),
-        SizedBox(
-          width: 96,
-          child: Text(
-            format(value),
-            textAlign: TextAlign.center,
-            style: CbText.num(context, size: 15, weight: FontWeight.w600, color: cb.ink),
-          ),
-        ),
-        IconButton.outlined(
-          tooltip: 'More $label',
-          onPressed: value + step <= max ? () => onChanged(value + step) : null,
-          icon: const Icon(Icons.add, size: 18),
-        ),
-      ],
-    );
-  }
-}
-
-const _bookingPresets = [0, 30, 60, 90, 120];
-
-String _bookingLabel(int m) => m == 0 ? 'Open play' : Billing.duration(m);
-
-/// Pick a booking (or open play) before the timer starts. Pops the minutes; 0 = open play.
-class _StartTimerDialog extends StatefulWidget {
-  const _StartTimerDialog({required this.table, required this.settings});
-
-  final RestaurantTable table;
-  final BusinessSettings settings;
-
-  @override
-  State<_StartTimerDialog> createState() => _StartTimerDialogState();
-}
-
-class _StartTimerDialogState extends State<_StartTimerDialog> {
-  late int _minutes = widget.settings.defaultBookingMinutes;
-
-  @override
-  Widget build(BuildContext context) {
-    final cb = context.cb;
-    final st = widget.settings;
-    final rate = st.poolRateFor(widget.table, DateTime.now());
-    final m = _minutes;
-    final info = m == 0
-        ? 'Counts up until you stop it. Billed for time played, '
-              'in ${st.billingBlockMinutes}-min blocks, minimum ${st.minimumMinutes} min.'
-        : 'Counts down from ${Billing.duration(m)} and warns you when time is up; it keeps running until stopped. '
-              '${st.bookedIsMinimum ? 'The full ${Billing.duration(m)} is charged' : 'Charged for time played, up to ${Billing.duration(m)}'}'
-              ' (${Fmt.inr(Billing.poolAmount(math.max(m, st.minimumMinutes), rate))} + GST at ${Fmt.inr(rate)}/hr). '
-              'Add time later with +30 min or +1 hour.';
-
-    return AlertDialog(
-      title: Text('Start ${widget.table.name}', style: CbText.cardTitle(context)),
-      content: SizedBox(
-        width: 440,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text('How long is the table booked for?', style: CbText.muted(context, 14)),
-              const SizedBox(height: 14),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  for (final p in _bookingPresets)
-                    CbChip(label: _bookingLabel(p), selected: m == p, onTap: () => setState(() => _minutes = p)),
-                ],
-              ),
-              const SizedBox(height: 16),
-              Wrap(
-                alignment: WrapAlignment.spaceBetween,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                runSpacing: 8,
-                children: [
-                  Text(
-                    'Other time',
-                    style: TextStyle(color: cb.ink, fontWeight: FontWeight.w500),
-                  ),
-                  _MinuteStepper(
-                    value: m,
-                    step: 15,
-                    min: 0,
-                    max: 12 * 60,
-                    label: 'time',
-                    format: _bookingLabel,
-                    onChanged: (v) => setState(() => _minutes = v),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 14),
-              Text(info, style: CbText.muted(context, 13).copyWith(height: 1.4)),
-            ],
-          ),
-        ),
-      ),
-      actions: [
-        TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Cancel')),
-        FilledButton.icon(
-          onPressed: () => Navigator.of(context).pop(_minutes),
-          icon: const Icon(Icons.play_arrow_rounded, size: 20),
-          label: const Text('Start timer'),
-        ),
-      ],
-    );
-  }
-}
-
 String _eventText(SessionEvent e) {
   final m = e.minutes ?? 0;
   final text = switch (e.type) {
-    'start' => m > 0 ? 'Started, booked ${Billing.duration(m)}' : 'Started, open play',
+    'start' =>
+      '${e.note == null ? 'Started' : 'Started for ${e.note}'}, ${m > 0 ? 'booked ${Billing.duration(m)}' : 'open play'}',
     'pause' => 'Paused',
     'resume' => 'Resumed',
     'extend' => 'Added ${Billing.duration(m)}',
@@ -1476,7 +1582,7 @@ String _eventText(SessionEvent e) {
     'stop' => 'Stopped',
     _ => e.type,
   };
-  return e.note == null ? text : '$text: ${e.note}';
+  return e.note == null || e.type == 'start' ? text : '$text: ${e.note}';
 }
 
 /// Change the booking, correct the played time, and see the table's timer history.
@@ -1510,7 +1616,7 @@ class _AdjustDialogState extends State<_AdjustDialog> {
     if (s == null || s.timerStartedAt == null) {
       return AlertDialog(
         title: Text(widget.table.name, style: CbText.cardTitle(context)),
-        content: const Text('This table has no timer running.'),
+        content: const Text('This table has no game in play.'),
         actions: [TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Close'))],
       );
     }
@@ -1553,13 +1659,13 @@ class _AdjustDialogState extends State<_AdjustDialog> {
                 crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
                   CbChip(label: 'Open play', selected: booked == 0, onTap: () => setState(() => _booked = 0)),
-                  _MinuteStepper(
+                  MinuteStepper(
                     value: booked,
                     step: 15,
                     min: 0,
                     max: 12 * 60,
                     label: 'booked time',
-                    format: _bookingLabel,
+                    format: bookingLabel,
                     onChanged: (v) => setState(() => _booked = v),
                   ),
                 ],
@@ -1567,7 +1673,7 @@ class _AdjustDialogState extends State<_AdjustDialog> {
               const SizedBox(height: 20),
               Text('Correct played time', style: bold),
               const SizedBox(height: 2),
-              Text('If the timer was started late or left running by mistake.', style: CbText.muted(context, 12.5)),
+              Text('If the game was started late or left running by mistake.', style: CbText.muted(context, 12.5)),
               const SizedBox(height: 8),
               Wrap(
                 alignment: WrapAlignment.spaceBetween,
@@ -1580,7 +1686,7 @@ class _AdjustDialogState extends State<_AdjustDialog> {
                         : 'Played ${Billing.duration(playedMin)} → ${Billing.duration(math.max(0, playedMin + _delta))}',
                     style: CbText.num(context, size: 14, color: cb.ink),
                   ),
-                  _MinuteStepper(
+                  MinuteStepper(
                     value: _delta,
                     step: 5,
                     min: -playedMin,
@@ -1596,14 +1702,14 @@ class _AdjustDialogState extends State<_AdjustDialog> {
                 controller: _reason,
                 decoration: InputDecoration(
                   labelText: needsReason ? 'Reason (required)' : 'Reason (optional)',
-                  hintText: 'e.g. timer started 10 min late',
+                  hintText: 'e.g. game started 10 min late',
                   errorText: _error,
                 ),
                 onChanged: (_) => setState(() => _error = null),
               ),
               if (s.events.isNotEmpty) ...[
                 const SizedBox(height: 20),
-                Text('Timer history', style: bold),
+                Text('Game history', style: bold),
                 const SizedBox(height: 6),
                 for (final e in s.events.reversed.take(10))
                   Padding(
