@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:cue_bill/data/models.dart';
 import 'package:cue_bill/data/store.dart';
 import 'package:cue_bill/main.dart';
+import 'package:cue_bill/ui/alert_sounds.dart';
 import 'package:cue_bill/ui/shell.dart';
 import 'package:cue_bill/ui/widgets.dart';
 import 'package:flutter/material.dart';
@@ -12,10 +13,21 @@ import 'package:provider/provider.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 /// Renders every screen at counter-PC and phone sizes, in light and dark, and fails on any layout error.
+/// Records alert sounds instead of playing them: tests have no audio plugin.
+class FakeSounds extends AlertSounds {
+  final played = <AlertTone>[];
+
+  @override
+  Future<void> play(AlertTone tone) async => played.add(tone);
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late Directory dir;
   late AppStore store;
+  late FakeSounds sounds;
+
+  setUp(() => AlertSounds.instance = sounds = FakeSounds());
 
   setUpAll(() async {
     sqfliteFfiInit();
@@ -37,6 +49,48 @@ void main() {
       await tester.pump(const Duration(milliseconds: 50));
     }
   }
+
+  testWidgets('a chime sounds before booked time runs out, and an alarm when it is up', (tester) async {
+    late RestaurantTable pool;
+    await tester.runAsync(() async {
+      dir = await Directory.systemTemp.createTemp('cuebill_sounds');
+      store = await AppStore.open(dbPath: '${dir.path}/s.sqlite', factory: databaseFactoryFfi, filesDir: dir.path);
+      pool = store.activeTables.firstWhere((t) => t.isPool);
+      await store.startTimer(pool, bookedMinutes: 60);
+    });
+    await tester.pumpWidget(CueBillApp(store: store));
+    await settle(tester);
+    final s = store.sessionFor(pool)!;
+    void tick() => Clock.now.value = DateTime.now();
+
+    // Plenty of time left: quiet.
+    tick();
+    await tester.pump();
+    expect(sounds.played, isEmpty);
+
+    // Within the warning (5 minutes by default): one chime, not repeated.
+    s.timerStartedAt = DateTime.now().subtract(const Duration(minutes: 57));
+    tick();
+    await tester.pump();
+    tick();
+    await tester.pump();
+    expect(sounds.played, [AlertTone.warning]);
+
+    // Time up: the alarm, and the game pauses at the booked hour.
+    s.timerStartedAt = DateTime.now().subtract(const Duration(minutes: 61));
+    tick();
+    await tester.pump();
+    expect(sounds.played, [AlertTone.warning, AlertTone.timeUp]);
+    expect(s.timerState, TimerState.paused);
+    expect(s.elapsedSeconds(), 60 * 60);
+    expect(find.textContaining('The game is paused'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.runAsync(() async {
+      await store.close();
+      await dir.delete(recursive: true);
+    });
+  });
 
   for (final size in const [Size(1440, 1000), Size(390, 844)]) {
     testWidgets('all screens render at ${size.width.toInt()} px', (tester) async {

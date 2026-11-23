@@ -68,7 +68,17 @@ class AppStore extends ChangeNotifier {
 
   Database get db => _db;
 
-  Future<void> close() => _db.close();
+  Future<void> close() async {
+    await _timeUpSaves;
+    await _db.close();
+  }
+
+  /// Saves of tables paused by [pauseFinishedBookings], which runs on the clock tick.
+  Future<void> _timeUpSaves = Future.value();
+
+  /// Waits until tables paused by [pauseFinishedBookings] are saved.
+  @visibleForTesting
+  Future<void> get timeUpSaves => _timeUpSaves;
 
   Future<void> _load() async {
     final s = await _db.query('settings', where: 'id = 1');
@@ -224,8 +234,8 @@ class AppStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> _log(TableSession s, String type, {int? minutes, String? note}) async {
-    final e = SessionEvent(sessionId: s.id!, type: type, minutes: minutes, note: note);
+  Future<void> _log(TableSession s, String type, {int? minutes, String? note, DateTime? at}) async {
+    final e = SessionEvent(sessionId: s.id!, type: type, minutes: minutes, note: note, at: at);
     final row = e.toRow()..remove('id');
     e.id = await _db.insert('session_events', row);
     s.events.add(e);
@@ -256,6 +266,39 @@ class AppStore extends ChangeNotifier {
     await _saveSession(s);
   }
 
+  /// Pauses every booked pool table whose booked time has run out, at the moment it ran
+  /// out, so no overtime builds up while nobody is looking (or the app was closed).
+  /// Each booking pauses once: resumed without adding time, the game runs on into
+  /// overtime; after adding time it pauses again when that runs out. Off when
+  /// [BusinessSettings.pauseWhenTimeUp] is. Returns the tables paused.
+  ///
+  /// The tables are paused in memory before this returns, so the caller sees the new
+  /// state straight away; the database catches up in the background.
+  List<RestaurantTable> pauseFinishedBookings([DateTime? now]) {
+    if (!settings.pauseWhenTimeUp) return const [];
+    final paused = <(RestaurantTable, TableSession, DateTime)>[];
+    for (final (table, s) in openTables) {
+      if (!table.isPool || !s.isBooked || s.timerState != TimerState.running) continue;
+      final left = s.remainingSeconds(now);
+      if (left == null || left > 0) continue;
+      final booked = s.bookedMinutes!;
+      if (s.events.any((e) => e.isTimeUpPause && e.minutes == booked)) continue;
+      // The moment played time reached the booking.
+      final endAt = s.timerStartedAt!.add(Duration(seconds: s.pausedSeconds + booked * 60));
+      s.timerPausedAt = endAt;
+      paused.add((table, s, endAt));
+    }
+    if (paused.isEmpty) return const [];
+    notifyListeners();
+    _timeUpSaves = _timeUpSaves.then((_) async {
+      for (final (_, s, endAt) in paused) {
+        await _log(s, 'pause', minutes: s.bookedMinutes, note: SessionEvent.timeUpNote, at: endAt);
+        await _saveSession(s);
+      }
+    });
+    return [for (final (t, _, _) in paused) t];
+  }
+
   Future<void> resumeTimer(RestaurantTable table) async {
     final s = sessionFor(table);
     if (s == null || s.timerState != TimerState.paused) return;
@@ -279,13 +322,18 @@ class AppStore extends ChangeNotifier {
 
   /// Adds time to a booked table (+30 min, +1 hour). An open-play table becomes booked
   /// for the time played so far, rounded up to the billing block, plus [minutes].
+  /// A game paused because its time ran out carries on straight away; one staff paused
+  /// themselves stays paused.
   Future<void> extendBooking(RestaurantTable table, int minutes) async {
+    await _timeUpSaves;
     final s = sessionFor(table);
     if (s == null || minutes <= 0 || s.timerStartedAt == null || s.timerState == TimerState.stopped) return;
     final base = s.bookedMinutes ?? _roundToBlock((s.elapsedSeconds() / 60).ceil());
     s.bookedMinutes = base + minutes;
     await _log(s, 'extend', minutes: minutes);
     await _saveSession(s);
+    final lastPause = s.events.where((e) => e.type == 'pause').lastOrNull;
+    if (s.timerState == TimerState.paused && (lastPause?.isTimeUpPause ?? false)) await resumeTimer(table);
   }
 
   int _roundToBlock(int minutes) {

@@ -9,6 +9,7 @@ import '../../core/billing.dart';
 import '../../core/format.dart';
 import '../../data/models.dart';
 import '../../data/store.dart';
+import '../alert_sounds.dart';
 import '../bookings.dart';
 import '../shell.dart';
 import '../theme.dart';
@@ -260,7 +261,8 @@ void _openOrderSheet(BuildContext context, RestaurantTable table) {
 // ------------------------------------------------------------------ booking alerts
 
 /// Plays a sound and shows a message when a booked pool table is nearly or fully out of time,
-/// whichever screen is open. Wraps the app shell.
+/// or a booking is coming up or due, whichever screen is open. A chime for the warning and
+/// the early reminder (5 s), an alarm for time up and a booking that is due (30 s). Wraps the app shell.
 class BookingAlerts extends StatefulWidget {
   const BookingAlerts({super.key, required this.child});
 
@@ -291,7 +293,13 @@ class _BookingAlertsState extends State<BookingAlerts> {
     final store = context.read<AppStore>();
     final settings = store.settings;
     final now = Clock.now.value;
+    store.pauseFinishedBookings(now);
     final open = <int>{};
+    AlertTone? tone;
+    void sound(AlertTone t) {
+      if (tone == null || t.index > tone!.index) tone = t;
+    }
+
     for (final (table, s) in store.openTables) {
       if (!table.isPool || s.id == null) continue;
       open.add(s.id!);
@@ -301,15 +309,16 @@ class _BookingAlertsState extends State<BookingAlerts> {
       if (alert == null) continue;
       final overMinutes = -left ~/ 60;
       final message = switch (alert) {
-        BookingAlert.timeUp => '${table.name}: booked time is up.',
+        BookingAlert.timeUp =>
+          s.timerState == TimerState.paused
+              ? '${table.name}: booked time is up. The game is paused: add time to carry on, or end it.'
+              : '${table.name}: booked time is up.',
         BookingAlert.stillOver => '${table.name}: time up, $overMinutes min over. End the game or add time.',
         BookingAlert.warning => '${table.name}: ${(left / 60).ceil()} min left.',
       };
       final over = alert != BookingAlert.warning;
-      if (over) {
-        SystemSound.play(SystemSoundType.alert);
-        HapticFeedback.heavyImpact();
-      }
+      sound(over ? AlertTone.timeUp : AlertTone.warning);
+      if (over) HapticFeedback.heavyImpact();
       _show(message, table, urgent: over);
     }
     _tracker.forgetExcept(open);
@@ -331,11 +340,14 @@ class _BookingAlertsState extends State<BookingAlerts> {
                 ? '${b.customerName} is due now on ${table.name}, but the table is still in play.'
                 : '${b.customerName}\'s booking on ${table.name} starts now. Start it or mark a no-show.',
         };
-        if (r == BookingReminder.due) SystemSound.play(SystemSoundType.alert);
+        sound(r == BookingReminder.due ? AlertTone.timeUp : AlertTone.warning);
         _show(message, table, urgent: r == BookingReminder.due && busy);
       }
     }
     _reminders.forgetExcept(waiting);
+
+    // One sound per tick, however many tables alerted.
+    if (tone != null) AlertSounds.instance.play(tone!);
   }
 
   void _show(String message, RestaurantTable table, {required bool urgent}) {

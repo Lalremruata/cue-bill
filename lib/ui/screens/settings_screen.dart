@@ -79,6 +79,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late int _repeat;
   late int _remind;
   late bool _bookedIsMinimum;
+  late bool _pauseWhenTimeUp;
   late bool _happy;
   late String _happyStart;
   late String _happyEnd;
@@ -168,6 +169,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _repeat = s.overtimeRepeatMinutes;
     _remind = s.bookingReminderMinutes;
     _bookedIsMinimum = s.bookedIsMinimum;
+    _pauseWhenTimeUp = s.pauseWhenTimeUp;
     _happy = s.happyHourEnabled;
     _happyStart = s.happyHourStart;
     _happyEnd = s.happyHourEnd;
@@ -205,6 +207,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     overtimeRepeatMinutes: _repeat,
     bookingReminderMinutes: _remind,
     bookedIsMinimum: _bookedIsMinimum,
+    pauseWhenTimeUp: _pauseWhenTimeUp,
     poolCostPerHour: _num('pool_cost', base.poolCostPerHour),
     happyHourEnabled: _happy,
     happyHourRate: _num('happy_rate', base.happyHourRate),
@@ -782,7 +785,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
           Text(
             'Every game starts from a booking with the customer\'s name and hours: booked ahead on the '
             'Pool bookings page, or a walk-in started on the spot. The game counts down and the table is '
-            'flagged when time is up. It keeps running until ended, and the alert sounds again while it runs over.',
+            'flagged when time is up. A chime sounds for 5 seconds at the warning and an alarm for 30 '
+            'seconds at time up, repeating while the game runs over. On Android the sounds follow the '
+            'alarm volume.',
             style: CbText.muted(context, 12.5),
           ),
           const SizedBox(height: 12),
@@ -850,6 +855,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 }),
               ),
               const Expanded(child: Text('Charge the full booking even if the table finishes early')),
+            ],
+          ),
+          Row(
+            children: [
+              Checkbox(
+                value: _pauseWhenTimeUp,
+                onChanged: (v) => setState(() {
+                  _pauseWhenTimeUp = v ?? true;
+                  _dirty = true;
+                }),
+              ),
+              const Expanded(child: Text('Pause the game when booked time is up. Adding time carries it on.')),
             ],
           ),
           Text(

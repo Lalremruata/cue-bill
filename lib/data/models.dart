@@ -50,6 +50,7 @@ class BusinessSettings {
     this.overtimeRepeatMinutes = 5,
     this.bookingReminderMinutes = 10,
     this.bookedIsMinimum = true,
+    this.pauseWhenTimeUp = true,
     this.gstFoodRate = 5,
     this.gstPoolRate = 18,
     this.savedAt,
@@ -104,6 +105,10 @@ class BusinessSettings {
 
   /// A booking is charged in full even if the table finishes early.
   bool bookedIsMinimum;
+
+  /// Pause a booked game when its time runs out, so no overtime builds up until staff
+  /// resume it or add time.
+  bool pauseWhenTimeUp;
   double gstFoodRate;
   double gstPoolRate;
   DateTime? savedAt;
@@ -181,6 +186,7 @@ class BusinessSettings {
     'overtime_repeat_minutes': overtimeRepeatMinutes,
     'booking_reminder_minutes': bookingReminderMinutes,
     'booked_is_minimum': bookedIsMinimum,
+    'pause_when_time_up': pauseWhenTimeUp,
     'gst_food_rate': gstFoodRate,
     'gst_pool_rate': gstPoolRate,
     'saved_at': _ms(savedAt),
@@ -221,6 +227,7 @@ class BusinessSettings {
     overtimeRepeatMinutes: _i(j['overtime_repeat_minutes'], 5),
     bookingReminderMinutes: _i(j['booking_reminder_minutes'], 10),
     bookedIsMinimum: _b(j['booked_is_minimum'], true),
+    pauseWhenTimeUp: _b(j['pause_when_time_up'], true),
     gstFoodRate: _d(j['gst_food_rate'], 5),
     gstPoolRate: _d(j['gst_pool_rate'], 18),
     savedAt: _dt(j['saved_at']),
@@ -487,6 +494,11 @@ class SessionEvent {
   int? id;
   int sessionId;
   String type; // start | pause | resume | extend | booking | adjust | stop
+
+  /// Note on the pause made when the booked time ran out.
+  static const timeUpNote = 'Time up';
+
+  bool get isTimeUpPause => type == 'pause' && note == timeUpNote;
   int? minutes;
   String? note;
   DateTime at;

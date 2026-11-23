@@ -54,6 +54,7 @@ dependencies:
   flutter_secure_storage: ^10.3.4
   url_launcher: ^6.3.2
   http: ^1.6.0
+  audioplayers: ^6.8.1
 
 dev_dependencies:
   flutter_test:
@@ -90,3 +91,4 @@ flutter:
           weight: 700
   assets:
     - assets/fonts/
+    - assets/sounds/

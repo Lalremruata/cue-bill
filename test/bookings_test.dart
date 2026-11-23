@@ -191,6 +191,73 @@ void main() {
     store = await AppStore.open(dbPath: '${dir.path}/test.sqlite', factory: databaseFactoryFfi, filesDir: dir.path);
   });
 
+  test('a booked game pauses when its time runs out, once per booking', () async {
+    await store.startTimer(pool, bookedMinutes: 60);
+    final s = store.sessionFor(pool)!;
+
+    // Time left: nothing happens.
+    s.timerStartedAt = DateTime.now().subtract(const Duration(minutes: 50));
+    expect(store.pauseFinishedBookings(), isEmpty);
+    expect(s.timerState, TimerState.running);
+
+    // Time ran out 15 minutes ago (the app was closed): paused at the hour, no overtime.
+    s.timerStartedAt = DateTime.now().subtract(const Duration(minutes: 75));
+    expect(store.pauseFinishedBookings(), [pool]);
+    expect(s.timerState, TimerState.paused);
+    expect(s.elapsedSeconds(), 60 * 60);
+    expect(s.remainingSeconds(), 0);
+    await store.timeUpSaves;
+    expect(s.events.last.isTimeUpPause, isTrue);
+    expect(s.events.last.at, s.timerPausedAt);
+
+    // Saved: still paused at the hour after a reload.
+    await store.reload();
+    final reloaded = store.sessionFor(pool)!;
+    expect(reloaded.timerState, TimerState.paused);
+    expect(reloaded.elapsedSeconds(), 60 * 60);
+
+    // Resumed without adding time: it runs on into overtime and is not paused again.
+    await store.resumeTimer(pool);
+    reloaded.pausedSeconds -= 10 * 60; // ten minutes of overtime played since
+    expect(store.pauseFinishedBookings(), isEmpty);
+    expect(reloaded.timerState, TimerState.running);
+    expect(reloaded.elapsedSeconds(), closeTo(70 * 60, 2));
+
+    // Time added: it pauses again when that runs out too.
+    await store.extendBooking(pool, 30);
+    expect(store.pauseFinishedBookings(), isEmpty);
+    reloaded.pausedSeconds -= 25 * 60;
+    expect(store.pauseFinishedBookings().map((t) => t.id), [pool.id]);
+    expect(reloaded.elapsedSeconds(), 90 * 60);
+
+    // Adding time to a game paused at time up carries it on straight away, with no overtime.
+    await store.extendBooking(pool, 30);
+    expect(reloaded.timerState, TimerState.running);
+    expect(reloaded.bookedMinutes, 120);
+    expect(reloaded.elapsedSeconds(), closeTo(90 * 60, 2));
+    expect(reloaded.events.map((e) => e.type).toList().reversed.take(3), ['resume', 'extend', 'pause']);
+
+    // A game staff paused themselves stays paused when time is added.
+    await store.pauseTimer(pool);
+    await store.extendBooking(pool, 30);
+    expect(reloaded.timerState, TimerState.paused);
+    expect(reloaded.bookedMinutes, 150);
+  });
+
+  test('time-up pause can be turned off, and open play never pauses', () async {
+    await store.saveTable(RestaurantTable(name: 'Pool Table 2', type: 'pool', sort: 1));
+    final open = store.activeTables.firstWhere((t) => t.isPool && t.id != pool.id);
+    await store.startTimer(open);
+    store.sessionFor(open)!.timerStartedAt = DateTime.now().subtract(const Duration(hours: 3));
+    expect(store.pauseFinishedBookings(), isEmpty);
+
+    await store.startTimer(pool, bookedMinutes: 60);
+    store.sessionFor(pool)!.timerStartedAt = DateTime.now().subtract(const Duration(minutes: 75));
+    store.settings.pauseWhenTimeUp = false;
+    expect(store.pauseFinishedBookings(), isEmpty);
+    expect(store.sessionFor(pool)!.timerState, TimerState.running);
+  });
+
   test('booking reminders fire once each: soon, then due', () {
     final t = BookingReminderTracker();
     final start = DateTime(2026, 11, 21, 18);
