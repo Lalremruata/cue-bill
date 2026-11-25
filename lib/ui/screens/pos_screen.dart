@@ -66,7 +66,7 @@ class PosScreen extends StatelessWidget {
 }
 
 /// Takeaway: open takeaway orders and the menu on the left, the order panel on the right.
-/// No tables and no pool timer; each order is numbered (Takeaway #1, #2, …) and billed on its own.
+/// No tables and no pool timer; each order is for a named customer and billed on its own.
 class TakeawayScreen extends StatelessWidget {
   const TakeawayScreen({super.key});
 
@@ -83,8 +83,8 @@ class TakeawayScreen extends StatelessWidget {
       actions: [
         FilledButton.icon(
           onPressed: () async {
-            final created = await store.newTakeaway();
-            nav.selectTakeaway(created.id);
+            final created = await showNewTakeawayDialog(context);
+            if (created != null) nav.selectTakeaway(created.id);
           },
           icon: const Icon(Icons.add, size: 18),
           label: const Text('New takeaway'),
@@ -102,6 +102,100 @@ class TakeawayScreen extends StatelessWidget {
             children: [for (final t in orders) _TableCard(table: t, selected: t.id == order?.id)],
           );
     return _OrderingLayout(table: order, takeaway: true, top: [header, list]);
+  }
+}
+
+/// Asks who the takeaway order is for, then starts it. Returns the order, or null if cancelled.
+Future<RestaurantTable?> showNewTakeawayDialog(BuildContext context) =>
+    showDialog<RestaurantTable>(context: context, builder: (_) => const _NewTakeawayDialog());
+
+class _NewTakeawayDialog extends StatefulWidget {
+  const _NewTakeawayDialog();
+
+  @override
+  State<_NewTakeawayDialog> createState() => _NewTakeawayDialogState();
+}
+
+class _NewTakeawayDialogState extends State<_NewTakeawayDialog> {
+  final _name = TextEditingController();
+  final _phone = TextEditingController();
+  int? _customerId;
+  String? _error;
+  bool _busy = false;
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _phone.dispose();
+    super.dispose();
+  }
+
+  Future<void> _start() async {
+    if (_busy || _name.text.trim().isEmpty) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final order = await context.read<AppStore>().newTakeaway(
+        name: _name.text,
+        phone: _phone.text,
+        customerId: _customerId,
+      );
+      if (mounted) Navigator.of(context).pop(order);
+    } on CueBillException catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = e.message;
+          _busy = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cb = context.cb;
+    return AlertDialog(
+      title: Text('New takeaway', style: CbText.cardTitle(context)),
+      content: SizedBox(
+        width: 460,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              CustomerFields(
+                name: _name,
+                phone: _phone,
+                customerId: _customerId,
+                hint: 'Who is the order for?',
+                onChanged: (id) => setState(() {
+                  _customerId = id;
+                  _error = null;
+                }),
+                onSubmitted: _start,
+              ),
+              if (_error != null) ...[
+                const SizedBox(height: 12),
+                Text(
+                  _error!,
+                  style: TextStyle(color: cb.red, fontSize: 13.5, fontWeight: FontWeight.w500),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Cancel')),
+        FilledButton.icon(
+          onPressed: _busy || _name.text.trim().isEmpty ? null : _start,
+          icon: const Icon(Icons.takeout_dining_outlined, size: 20),
+          label: const Text('Start order'),
+        ),
+      ],
+    );
   }
 }
 
@@ -532,7 +626,8 @@ class _TableCard extends StatelessWidget {
       builder: (context, now) {
         final dot = dotFor(session, table);
         final rate = session?.hourlyRate ?? store.settings.poolRateFor(table, now);
-        final subtitle = table.isPool ? 'Pool table · ${Fmt.inr(rate)}/hr' : table.typeLabel;
+        final phone = table.isTakeaway ? session?.customerPhone : null;
+        final subtitle = table.isPool ? 'Pool table · ${Fmt.inr(rate)}/hr' : (phone ?? table.typeLabel);
         final booking = session?.bookingState(store.settings.bookingWarnMinutes, now) ?? BookingState.none;
 
         final next = table.isPool ? store.nextBookingFor(table, now) : null;
@@ -907,7 +1002,11 @@ class _PanelHeader extends StatelessWidget {
           ),
           const SizedBox(height: 2),
           Text(
-            '${table.typeLabel} · ${s == null ? 'Free' : '$n item${n == 1 ? '' : 's'}'}',
+            [
+              table.typeLabel,
+              if (table.isTakeaway && s?.customerPhone != null) s!.customerPhone!,
+              s == null ? 'Free' : '$n item${n == 1 ? '' : 's'}',
+            ].join(' · '),
             style: TextStyle(color: dim, fontSize: 13.5),
           ),
         ],

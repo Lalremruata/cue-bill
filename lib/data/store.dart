@@ -186,24 +186,20 @@ class AppStore extends ChangeNotifier {
 
   // ------------------------------------------------------- timer and orders
 
-  /// Starts a takeaway order: no table, no pool timer. Orders are numbered Takeaway #1, #2, …
-  /// from 1 each day. Each is billed or cleared on its own, then put away.
-  Future<RestaurantTable> newTakeaway() async {
-    final today = startOfDay(DateTime.now()).millisecondsSinceEpoch;
+  /// Starts a takeaway order for a customer: no table, no pool timer. The order is named after
+  /// the customer, who is filled in at checkout. Each is billed or cleared on its own, then put away.
+  Future<RestaurantTable> newTakeaway({required String name, String? phone, int? customerId}) async {
+    final who = name.trim();
+    if (who.isEmpty) throw CueBillException("Enter the customer's name.");
     late RestaurantTable table;
     late TableSession session;
     await _db.transaction((txn) async {
-      final started = Sqflite.firstIntValue(
-        await txn.rawQuery(
-          '''SELECT COUNT(*) FROM table_sessions ts
-             JOIN restaurant_tables rt ON rt.id = ts.restaurant_table_id
-             WHERE rt.type = 'takeaway' AND ts.created_at >= ?''',
-          [today],
-        ),
-      );
-      table = RestaurantTable(name: 'Takeaway #${(started ?? 0) + 1}', type: 'takeaway');
+      table = RestaurantTable(name: who, type: 'takeaway');
       table.id = await txn.insert('restaurant_tables', table.toRow()..remove('id'));
-      session = TableSession(tableId: table.id!);
+      session = TableSession(tableId: table.id!)
+        ..customerName = who
+        ..customerPhone = Customer.normalisePhone(phone)
+        ..customerId = customerId;
       session.id = await txn.insert('table_sessions', session.toRow()..remove('id'));
     });
     tables.add(table);
