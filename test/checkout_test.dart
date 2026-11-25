@@ -297,14 +297,21 @@ void main() {
     await db.close();
   });
 
-  test('takeaway orders need no table: numbered, open side by side, put away once done', () async {
-    final first = await store.newTakeaway();
-    final second = await store.newTakeaway();
-    final third = await store.newTakeaway();
-    expect([first.name, second.name, third.name], ['Takeaway #1', 'Takeaway #2', 'Takeaway #3']);
-    expect([for (final t in store.takeawayOrders) t.name], ['Takeaway #1', 'Takeaway #2', 'Takeaway #3']);
+  test('takeaway orders need no table: named for the customer, open side by side, put away once done', () async {
+    await expectLater(store.newTakeaway(name: '  '), throwsA(isA<CueBillException>()));
+    expect(store.takeawayOrders, isEmpty);
+    final regular = await store.saveCustomer(Customer(name: 'Lalpeka', phone: '98765 43210', discountPercent: 10));
+
+    final first = await store.newTakeaway(name: ' Ravi ', phone: '+91 98765-00000');
+    final second = await store.newTakeaway(name: 'Mama');
+    final third = await store.newTakeaway(name: regular.name, phone: regular.phone, customerId: regular.id);
+    expect([first.name, second.name, third.name], ['Ravi', 'Mama', 'Lalpeka']);
+    expect([for (final t in store.takeawayOrders) t.name], ['Ravi', 'Mama', 'Lalpeka']);
     expect(store.activeTables.any((t) => t.isTakeaway), isFalse);
-    expect(store.sessionFor(first), isNotNull);
+    final s = store.sessionFor(first)!;
+    expect([s.customerName, s.customerPhone, s.customerId], ['Ravi', '9876500000', null]);
+    expect(store.sessionFor(second)!.customerPhone, isNull);
+    expect(store.sessionFor(third)!.customerId, regular.id);
 
     final menu = {for (final m in store.menu) m.name: m};
     await store.addItem(first, menu['Pork chowmein']!, 2);
@@ -313,17 +320,23 @@ void main() {
     expect(calc.isPool, isFalse);
     expect(calc.itemsSubtotal, 300);
 
-    final invoice = await store.completeSale(first, const CheckoutOptions(paymentMethod: 'cash'));
-    expect(invoice.tableName, 'Takeaway #1');
+    final invoice = await store.completeSale(
+      first,
+      CheckoutOptions(paymentMethod: 'cash', customerName: s.customerName, customerPhone: s.customerPhone),
+    );
+    expect(invoice.tableName, 'Ravi');
+    expect(invoice.customerName, 'Ravi');
+    expect(invoice.customerPhone, '9876500000');
     expect(invoice.orderType, 'takeaway');
     await store.clearTable(third);
-    expect([for (final t in store.takeawayOrders) t.name], ['Takeaway #2']);
+    expect([for (final t in store.takeawayOrders) t.name], ['Mama']);
 
-    // Still open after a restart; billed and cancelled ones stay put away.
+    // Still open after a restart, customer and all; billed and cancelled ones stay put away.
     await store.reload();
-    expect([for (final t in store.takeawayOrders) t.name], ['Takeaway #2']);
-    expect(store.sessionFor(store.takeawayOrders.single)!.items.single.qty, 1);
-    expect((await store.newTakeaway()).name, 'Takeaway #4');
+    expect([for (final t in store.takeawayOrders) t.name], ['Mama']);
+    final kept = store.sessionFor(store.takeawayOrders.single)!;
+    expect(kept.items.single.qty, 1);
+    expect(kept.customerName, 'Mama');
   });
 
   test('upgrading to version 4 puts away the old Takeaway table unless it has an order open', () async {
@@ -357,7 +370,7 @@ void main() {
 
   test('takeaway and dine-in sales are saved and reported separately', () async {
     final dining = store.activeTables.firstWhere((t) => t.name == 'Table 1');
-    final takeaway = await store.newTakeaway();
+    final takeaway = await store.newTakeaway(name: 'Ravi');
     final pool = store.activeTables.firstWhere((t) => t.isPool);
     final menu = {for (final m in store.menu) m.name: m};
 
