@@ -388,7 +388,7 @@ class RestaurantTable {
 
   bool get isPool => type == 'pool';
 
-  /// A takeaway order (Takeaway #1, #2, …), not a real table.
+  /// A takeaway order, named after its customer, not a real table.
   bool get isTakeaway => type == 'takeaway';
 
   /// Takeaway orders are takeaway; pool and dining tables are dine-in.

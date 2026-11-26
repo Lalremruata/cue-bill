@@ -104,7 +104,7 @@ void main() {
         await store.startTimer(pool);
         await store.addItem(pool, store.menu.first, 2);
         await store.addItem(store.activeTables[3], store.menu[3]);
-        await store.addItem(await store.newTakeaway(), store.menu[4]);
+        await store.addItem(await store.newTakeaway(name: 'Zova', phone: '9876511111'), store.menu[4]);
         // A long order: every menu item, so the order lines must scroll.
         for (final m in store.menu.skip(1)) {
           await store.addItem(pool, m);
@@ -363,10 +363,11 @@ void main() {
       });
     });
 
-    testWidgets('takeaway page at ${size.width.toInt()} px: new order, items, checkout, back', (tester) async {
+    testWidgets('takeaway page at ${size.width.toInt()} px: customer first, items, checkout, back', (tester) async {
       await tester.runAsync(() async {
         dir = await Directory.systemTemp.createTemp('cuebill_takeaway');
         store = await AppStore.open(dbPath: '${dir.path}/t.sqlite', factory: databaseFactoryFfi, filesDir: dir.path);
+        await store.saveCustomer(Customer(name: 'Lalpeka', phone: '98765 43210', discountPercent: 10));
       });
       tester.view.physicalSize = size;
       tester.view.devicePixelRatio = 1;
@@ -382,19 +383,50 @@ void main() {
       expect(find.text('No takeaway orders open. Tap New takeaway to start one.'), findsOneWidget);
       expect(find.text('No order selected'), size.width >= 1080 ? findsOneWidget : findsNothing);
 
+      // The customer comes first; cancelling starts nothing.
+      final startOrder = find.ancestor(
+        of: find.text('Start order'),
+        matching: find.byWidgetPredicate((w) => w is FilledButton),
+      );
       await tester.tap(find.text('New takeaway'));
       await settle(tester);
+      expect(find.text('Who is the order for?'), findsOneWidget);
+      expect(tester.widget<FilledButton>(startOrder).onPressed, isNull, reason: 'no name yet');
+      expect(tester.takeException(), isNull, reason: 'new takeaway dialog');
+      await tester.tap(find.text('Cancel'));
+      await settle(tester);
+      expect(store.takeawayOrders, isEmpty);
+
+      // A regular, picked from what is typed.
+      await tester.tap(find.text('New takeaway'));
+      await settle(tester);
+      final nameField = find.descendant(
+        of: find.widgetWithText(FieldLabel, 'Customer name'),
+        matching: find.byType(TextField),
+      );
+      await tester.enterText(nameField, 'Lal');
+      await settle(tester);
+      await tester.tap(find.text('Lalpeka  9876543210'));
+      await settle(tester);
+      expect(find.textContaining('Regular customer · 10% off'), findsOneWidget);
+      await tester.tap(startOrder);
+      await settle(tester);
       final order = store.takeawayOrders.single;
-      expect(order.name, 'Takeaway #1');
+      expect(order.name, 'Lalpeka');
+      final session = store.sessionFor(order)!;
+      expect([session.customerName, session.customerPhone], ['Lalpeka', '9876543210']);
+      expect(session.customerId, isNotNull);
       expect(nav.selectedTakeawayId, order.id);
       expect(nav.selectedTableId, table.id, reason: 'the table selection is kept apart');
-      expect(find.text('Takeaway #1'), findsWidgets);
+      expect(find.text('Lalpeka'), findsWidgets);
+      expect(find.text('9876543210'), findsOneWidget, reason: 'phone on the order card');
+      expect(find.text('Takeaway #1'), findsNothing);
       expect(tester.takeException(), isNull, reason: 'takeaway order open');
 
       // Not on Tables & Orders.
       nav.go(Section.pos);
       await settle(tester);
-      expect(find.text('Takeaway #1'), findsNothing);
+      expect(find.text('Lalpeka'), findsNothing);
       nav.go(Section.takeaway);
       await settle(tester);
 
@@ -408,7 +440,8 @@ void main() {
       await settle(tester);
       expect(nav.section, Section.takeaway);
       expect(nav.checkoutTableId, order.id);
-      expect(find.text('Back to Takeaway #1'), findsOneWidget);
+      expect(find.text('Back to Lalpeka'), findsOneWidget);
+      expect(find.textContaining('Regular customer · 10% off'), findsOneWidget, reason: 'checkout knows the customer');
       expect(tester.takeException(), isNull, reason: 'takeaway checkout');
 
       final complete = find.textContaining('Complete sale').last;
@@ -418,7 +451,7 @@ void main() {
       await settle(tester);
       await settle(tester);
       expect(store.takeawayOrders, isEmpty);
-      expect(find.textContaining('Takeaway #1 is done.'), findsOneWidget);
+      expect(find.textContaining('Lalpeka is done.'), findsOneWidget);
       final back = find.text('Back to takeaway').last;
       await tester.ensureVisible(back);
       await settle(tester);

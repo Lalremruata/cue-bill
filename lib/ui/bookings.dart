@@ -106,6 +106,125 @@ Future<bool> showBookingDialog(
   return ok ?? false;
 }
 
+/// Customer name (required) and phone, with regulars to pick from as staff type. Shared by the
+/// pool booking and new takeaway dialogs. [onChanged] gets the regular picked, or null once the
+/// details no longer match one, on every edit.
+class CustomerFields extends StatefulWidget {
+  const CustomerFields({
+    super.key,
+    required this.name,
+    required this.phone,
+    required this.customerId,
+    required this.onChanged,
+    this.hint,
+    this.onSubmitted,
+  });
+
+  final TextEditingController name;
+  final TextEditingController phone;
+  final int? customerId;
+  final ValueChanged<int?> onChanged;
+  final String? hint;
+
+  /// Enter pressed in either field.
+  final VoidCallback? onSubmitted;
+
+  @override
+  State<CustomerFields> createState() => _CustomerFieldsState();
+}
+
+class _CustomerFieldsState extends State<CustomerFields> {
+  String _lookup = '';
+
+  void _typed(String value) {
+    final c = context.read<AppStore>().customerById(widget.customerId);
+    // Editing the details away from the regular's means it is someone else.
+    final stillThem =
+        c != null && widget.name.text.trim() == c.name && Customer.normalisePhone(widget.phone.text) == c.phone;
+    setState(() => _lookup = value);
+    widget.onChanged(stillThem ? c.id : null);
+  }
+
+  void _pick(Customer c) {
+    widget.name.text = c.name;
+    widget.phone.text = c.phone ?? '';
+    setState(() => _lookup = '');
+    widget.onChanged(c.id);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final store = context.watch<AppStore>();
+    final cb = context.cb;
+    final matches = store.searchCustomers(_lookup, limit: 4).where((c) => c.id != widget.customerId).toList();
+    final linked = store.customerById(widget.customerId);
+    final submit = widget.onSubmitted == null ? null : (String _) => widget.onSubmitted!();
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        FieldLabel(
+          'Customer name',
+          child: TextField(
+            controller: widget.name,
+            autofocus: true,
+            textCapitalization: TextCapitalization.words,
+            decoration: InputDecoration(hintText: widget.hint),
+            onChanged: _typed,
+            onSubmitted: submit,
+          ),
+        ),
+        const SizedBox(height: 14),
+        FieldLabel(
+          'Phone (optional)',
+          child: TextField(
+            controller: widget.phone,
+            keyboardType: TextInputType.phone,
+            onChanged: _typed,
+            onSubmitted: submit,
+          ),
+        ),
+        if (linked != null) ...[
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Icon(Icons.verified_outlined, size: 16, color: cb.greenText),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  linked.discountPercent > 0
+                      ? 'Regular customer · ${Fmt.trim(linked.discountPercent)}% off at checkout'
+                      : 'Regular customer',
+                  style: TextStyle(color: cb.greenText, fontSize: 13, fontWeight: FontWeight.w500),
+                ),
+              ),
+            ],
+          ),
+        ],
+        for (final c in matches)
+          InkWell(
+            borderRadius: BorderRadius.circular(8),
+            onTap: () => _pick(c),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+              child: Row(
+                children: [
+                  Icon(Icons.person_outline, size: 18, color: cb.muted),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text('${c.name}  ${c.phone ?? ''}'.trim(), style: TextStyle(color: cb.ink, fontSize: 14)),
+                  ),
+                  if (c.discountPercent > 0) CbBadge('${Fmt.trim(c.discountPercent)}% off', tone: Tone.green),
+                ],
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
 class BookingDialog extends StatefulWidget {
   const BookingDialog({super.key, this.table, this.edit, this.walkIn = false, this.day, this.start});
 
@@ -127,7 +246,6 @@ class _BookingDialogState extends State<BookingDialog> {
   late int? _tableId;
   late DateTime _start;
   late int _minutes;
-  String _lookup = '';
   String? _error;
   bool _busy = false;
 
@@ -178,23 +296,8 @@ class _BookingDialogState extends State<BookingDialog> {
     createdAt: widget.edit?.createdAt,
   );
 
-  void _typed(String value) {
-    final c = context.read<AppStore>().customerById(_customerId);
-    setState(() {
-      // Editing the details away from the regular's means it is someone else.
-      if (c != null && (_name.text.trim() != c.name || Customer.normalisePhone(_phone.text) != c.phone)) {
-        _customerId = null;
-      }
-      _lookup = value;
-      _error = null;
-    });
-  }
-
-  void _pick(Customer c) => setState(() {
-    _customerId = c.id;
-    _name.text = c.name;
-    _phone.text = c.phone ?? '';
-    _lookup = '';
+  void _customerChanged(int? id) => setState(() {
+    _customerId = id;
     _error = null;
   });
 
@@ -261,8 +364,6 @@ class _BookingDialogState extends State<BookingDialog> {
     final start = draft.startAt;
     final rate = st.poolRateFor(table, start);
     final bold = TextStyle(color: cb.ink, fontWeight: FontWeight.w600, fontSize: 14.5);
-    final matches = store.searchCustomers(_lookup, limit: 4).where((c) => c.id != _customerId).toList();
-    final linked = store.customerById(_customerId);
     final presets = [if (widget.walkIn) 0, ...bookingPresets];
 
     final String info;
@@ -308,59 +409,13 @@ class _BookingDialogState extends State<BookingDialog> {
                 ),
                 const SizedBox(height: 14),
               ],
-              FieldLabel(
-                'Customer name',
-                child: TextField(
-                  controller: _name,
-                  autofocus: true,
-                  textCapitalization: TextCapitalization.words,
-                  decoration: const InputDecoration(hintText: 'Who is playing?'),
-                  onChanged: _typed,
-                ),
+              CustomerFields(
+                name: _name,
+                phone: _phone,
+                customerId: _customerId,
+                hint: 'Who is playing?',
+                onChanged: _customerChanged,
               ),
-              const SizedBox(height: 14),
-              FieldLabel(
-                'Phone (optional)',
-                child: TextField(controller: _phone, keyboardType: TextInputType.phone, onChanged: _typed),
-              ),
-              if (linked != null) ...[
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Icon(Icons.verified_outlined, size: 16, color: cb.greenText),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        linked.discountPercent > 0
-                            ? 'Regular customer · ${Fmt.trim(linked.discountPercent)}% off at checkout'
-                            : 'Regular customer',
-                        style: TextStyle(color: cb.greenText, fontSize: 13, fontWeight: FontWeight.w500),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-              for (final c in matches)
-                InkWell(
-                  borderRadius: BorderRadius.circular(8),
-                  onTap: () => _pick(c),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
-                    child: Row(
-                      children: [
-                        Icon(Icons.person_outline, size: 18, color: cb.muted),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            '${c.name}  ${c.phone ?? ''}'.trim(),
-                            style: TextStyle(color: cb.ink, fontSize: 14),
-                          ),
-                        ),
-                        if (c.discountPercent > 0) CbBadge('${Fmt.trim(c.discountPercent)}% off', tone: Tone.green),
-                      ],
-                    ),
-                  ),
-                ),
               if (!widget.walkIn) ...[
                 const SizedBox(height: 18),
                 Text('When', style: bold),
